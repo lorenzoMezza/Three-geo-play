@@ -131,7 +131,7 @@ geo.onFrameUpdate(); // the map re-centers as the player moves
 
 ## Tile Providers
 
-Currently tested and supported with [OpenMapTiles Schema](https://openmaptiles.org/schema/)) compatible endpoints.
+Currently tested and supported with [OpenMapTiles Schema](https://openmaptiles.org/schema/) compatible endpoints.
 
 > **Coming soon:** Mapbox Vector Tiles support.
 
