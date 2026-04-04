@@ -1,0 +1,13 @@
+{
+  "name": "three-geo-play",
+  "version": "1.0.0",
+  "description": "Geographic map renderer built on Three.js",
+  "main": "src/index.js",
+  "types": "index.d.ts",
+  "type": "module",
+  "keywords": ["three.js", "map", "geo", "openstreetmap"],
+  "license": "MIT",
+  "peerDependencies": {
+    "three": ">=0.150.0"
+  }
+}
