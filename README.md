@@ -80,7 +80,7 @@ style.transportationLayer.pedestrian.isVisible    = true;
 style.landUseLayer.residential.material = new THREE.MeshBasicMaterial({ color: 0xe8f4e8 });
 style.landUseLayer.industrial.isVisible = false;
 
-// Buildings — material must be transparent to enable 3D extrusion
+// Buildings 3D — material
 style.buildingLayer.building.material  = new THREE.MeshBasicMaterial({ color: 0xaaaaaa, transparent: true, opacity: 0.9 });
 style.buildingLayer.building.isVisible = true;  // false to hide all buildings
 style.buildingLayer.building.height    = 1;     // extrusion scale factor
