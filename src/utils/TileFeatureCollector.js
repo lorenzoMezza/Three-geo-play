@@ -61,103 +61,50 @@ export class TileFeatureCollector {
         for (const layer of layers) {
             const extent = layer.extent;
             for (const feature of layer.features) {
+                const isLine    = feature.type === GeomType.LINESTRING;
+                const isPolygon = feature.type === GeomType.POLYGON;
+                if (!isLine && !isPolygon) continue;
 
-                switch (feature.type) {
-                    case GeomType.LINESTRING:
-                        this.#collectLine(layer, feature, scale, lineGroups);
-                        break;
-                    case GeomType.POLYGON:
-                        this.#collectPolygon(layer, feature, scale, polygonGroups);
-                        break;
+                const match = classify(layer.name, feature.properties);
+                if (!match) continue;
+                const style = this.#styleFor(match);
+                if (!style) continue;
+                const isLineStyle = style instanceof LineFeatureType;
+
+                if (isLine) {
+                    if (isLineStyle) lines.push({ style, feature, extent, ramp: !!match.ramp });
+                } else if (match.layer === 'building') {
+                    // Outlines flagged `hide_3d` are kept on purpose: in OSM their
+                    // `building:part`s often cover only a fraction of the building
+                    // (e.g. just a dome or a tower), so skipping them leaves holes.
+                    buildings.push({ style, feature, extent, ramp: false });
+                } else if (!isLineStyle) {
+                    polygons.push({ style, feature, extent, ramp: false });
                 }
             }
         }
 
-        return { lineGroups, polygonGroups };
+        return { lines, polygons, buildings };
     }
 
-    #collectLine(layer, feature, scale, lineGroups) {
-        const featureClass = feature.properties.get('class');
-        const style        = this.#resolveStyle(layer.name, featureClass);
-        if (!style?.isVisible) return;
+    /**
+     * Visible style of a schema match; the first type name the layer knows wins.
+     * @param {import('./tileSchemas.js').SchemaMatch} match
+     */
+    #styleFor(match) {
+        const styleLayer = this.#mapStyle.getStyleLayerByName(match.layer);
+        if (!styleLayer || !styleLayer.isVisible) return null;
 
-        const [tileX, tileY] = this.#positionXY;
-        const group = this.#getOrCreate(
-            LineGroup, `${layer.name}::${featureClass}`,
-            style, layer.name, featureClass, lineGroups,
-        );
-
-        for (const rawLine of parseGeometry(feature.geometry))
-            group.lines.push(this.#segmentLine(rawLine, scale, tileX, tileY));
-    }
-
-#segmentLine(rawLine, scale, tileX, tileY) {
-    const simplified = simplifyLine(rawLine, 2.0);
-    const out = new Float32Array(simplified.length);
-    for (let i = 0; i < simplified.length; i += 2) {
-        out[i]     = simplified[i]     * scale + tileX;
-        out[i + 1] = simplified[i + 1] * scale + tileY;
-    }
-    return out;
-}
-
-    #collectPolygon(layer, feature, scale, polygonGroups) {
-        const featureClass = feature.properties.get('class') ?? layer.name;
-        const style        = this.#resolveStyle(layer.name, featureClass);
-        if (!style?.isVisible) return;
-
-        const [tileX, tileY] = this.#positionXY;
-        const group = this.#getOrCreate(
-            PolygonGroup, `${layer.name}::${featureClass}`,
-            style, layer.name, featureClass, polygonGroups,
-        );
-
-        const rings = parseGeometry(feature.geometry)
-            .map(ring => this.#normalizeRing(ring, scale, tileX, tileY));
-
-        group.features.push({ rings, properties: feature.properties });
-    }
-
-    #normalizeRing(rawRing, scale, tileX, tileY) {
-        const out = new Float32Array(rawRing.length);
-        for (let i = 0; i < rawRing.length; i += 2) {
-            out[i]     = rawRing[i]     * scale + tileX;
-            out[i + 1] = rawRing[i + 1] * scale + tileY;
+        let style = null;
+        if (Array.isArray(match.type)) {
+            for (const name of match.type) {
+                if (typeof name === 'string' && (style = styleLayer.getTypeByName(name))) break;
+            }
+        } else if (typeof match.type === 'string') {
+            style = styleLayer.getTypeByName(match.type);
         }
-        return out;
-    }
 
-#resolveStyle(layerName, featureClass) {
-    if (layerName === "landuse" &&
-       (featureClass === "grass" || featureClass === "park")) {
-        layerName = "landcover";
-    }
-
-    const styleLayer = this.#mapconfig.mapStyle.getStyleLayerByName(layerName);
-    if (!styleLayer) {
-        TileFeatureCollector.unknownSet.add(`[no layer] ${featureClass}/${layerName}`);
-        return null;
-    }
-
-    const style = styleLayer.getTypeByName
-        ? styleLayer.getTypeByName(featureClass)
-        : styleLayer;
-
-    if (!style) {
-        TileFeatureCollector.unknownSet.add(`[no type] ${featureClass}/${layerName}`);
-    }
-
-    return style ?? null;
-}
-
-    #getOrCreate(GroupClass, key, style, layerName, featureClass, list) {
-        let group = list.find(g => g.identifier === key);
-        if (!group) {
-            group              = new GroupClass(key, style);
-            group.layerName    = layerName;
-            group.featureClass = featureClass;
-            list.push(group);
-        }
-        return group;
+        if (!style || !style.isVisible || !style.material) return null;
+        return style;
     }
 }
