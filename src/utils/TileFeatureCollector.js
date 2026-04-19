@@ -1,47 +1,65 @@
-import { parseGeometry } from "../geom_utils/geomParser";
-import { simplifyLine } from "../geom_utils/RDPalgoritm";
+import { GeomType } from './vectorTile.js';
+import { LineFeatureType } from '../style/core/Linefeaturetype.js';
+import { TileSchema, resolveSchema, schemaReadsLayer } from './tileSchemas.js';
 
-class FeatureGroup {
-    identifier;
-    style;
-    layerName    = '';
-    featureClass = '';
+/**
+ * @typedef {Object} CollectedFeature
+ * @property {import('../style/core/Basefeaturetype.js').BaseFeatureType} style
+ * @property {import('./vectorTile.js').VectorTileFeature} feature
+ * @property {number} extent - Extent of the layer the feature belongs to.
+ * @property {boolean} ramp  - Link road (lines only).
+ */
 
-    constructor(identifier, style) {
-        this.identifier = identifier;
-        this.style      = style;
-    }
-}
-
-export class LineGroup extends FeatureGroup {
-   lines = [];
-}
-
-export class PolygonGroup extends FeatureGroup {
-    features = [];
-}
-
-
-const GeomType = Object.freeze({ UNKNOWN: 0, POINT: 1, LINESTRING: 2, POLYGON: 3 });
-
+/**
+ * Resolves the style of every feature of a decoded tile — through the tile
+ * schema (OpenMapTiles, Mapbox Streets or a custom one) — and sorts the
+ * renderable ones into lines, flat polygons and buildings.
+ * Hidden features, and features without a matching style, are dropped.
+ */
 export class TileFeatureCollector {
 
-    static unknownSet = new Set();
+    /** @type {import('../style/MapStyle.js').MapStyle} */
+    #mapStyle;
 
-    #mapconfig   = null;
-    #positionXY  = null;
+    /** @type {string|import('./tileSchemas.js').TileSchemaFunction} */
+    #schema;
 
-    constructor(positionXY, mapconfig) {
-        this.#positionXY = positionXY;
-        this.#mapconfig  = mapconfig;
+    /** @type {string[]} Layer names announced by the source (TileJSON), used to detect the schema. */
+    #sourceLayers;
+
+    /**
+     * @param {import('../style/MapStyle.js').MapStyle} mapStyle
+     * @param {string|import('./tileSchemas.js').TileSchemaFunction} [schema=TileSchema.AUTO]
+     * @param {string[]} [sourceLayers=[]]
+     */
+    constructor(mapStyle, schema = TileSchema.AUTO, sourceLayers = []) {
+        this.#mapStyle     = mapStyle;
+        this.#schema       = schema;
+        this.#sourceLayers = sourceLayers;
     }
 
-    collect(protoTile) {
-        const lineGroups    = [];
-        const polygonGroups = [];
+    /**
+     * Whether a tile layer can contain renderable features (used to skip decoding the others).
+     * @param {string} layerName
+     * @returns {boolean}
+     */
+    acceptsLayer = (layerName) => schemaReadsLayer(this.#schema, layerName);
 
-        for (const layer of protoTile.layers) {
-            const scale = (1 / layer.extent) * this.#mapconfig.tileWorldSize;
+    /**
+     * @param {import('./vectorTile.js').VectorTileLayer[]} layers
+     * @returns {{ lines: CollectedFeature[], polygons: CollectedFeature[], buildings: CollectedFeature[] }}
+     */
+    collect(layers) {
+        const lines     = [];
+        const polygons  = [];
+        const buildings = [];
+        const classify  = resolveSchema(
+            this.#schema,
+            this.#sourceLayers.length > 0 ? this.#sourceLayers : layers.map(layer => layer.name),
+        );
+
+        for (const layer of layers) {
+            const extent = layer.extent;
             for (const feature of layer.features) {
 
                 switch (feature.type) {
