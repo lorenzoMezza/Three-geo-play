@@ -1,19 +1,25 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import Stats from 'three/addons/libs/stats.module.js'
-import { ThreeGeoPlay, TileLayout, ViewMode } from 'three-geo-play'
+import { ThreeGeoPlay, TileLayout, ViewMode } from 'lm-three-geo-play'
 
+import { SOURCES, PLACES, isInsideTileset } from './src/tileset.js'
+import { Atmosphere, installRadialFog } from './src/atmosphere.js'
+import { buildPanel } from './src/panel.js'
+import './style.css'
+
+// Must run before any material is compiled.
+installRadialFog()
+
+// ─── Scene ──────────────────────────────────────────────────────────────────
 const scene = new THREE.Scene()
-scene.background = new THREE.Color(0x1a1a2e)
-
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 5000)
-camera.position.set(0, 100, 200)
-camera.lookAt(0, 0, 0)
 
 const renderer = new THREE.WebGLRenderer({ antialias: true })
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 renderer.setSize(window.innerWidth, window.innerHeight)
-renderer.domElement.style.cssText = 'position:fixed;top:0;left:0;z-index:0'
-document.body.appendChild(renderer.domElement)
+document.getElementById('viewport').append(renderer.domElement)
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 50000)
+camera.position.set(0, 90, 140)
 
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.enableDamping = true
