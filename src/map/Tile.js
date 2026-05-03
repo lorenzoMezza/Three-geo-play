@@ -1,131 +1,107 @@
 import * as THREE from 'three';
 
-import { deserializeMVT }       from '../utils/deserializeProtobuf';
-import { TileFeatureCollector } from '../utils/TileFeatureCollector';
-import { earcut }               from '../geom_utils/earcut';
+import { decodeVectorTile }     from '../utils/vectorTile.js';
+import { TileFeatureCollector } from '../utils/TileFeatureCollector.js';
+import { FloatArrayBuilder }    from '../geom_utils/FloatArrayBuilder.js';
+import { appendThickLine }      from '../geom_utils/lineGeometry.js';
+import { simplifyLine }         from '../geom_utils/RDPalgoritm.js';
+import { LineLayering, lineLevel } from './lineLayering.js';
 import {
-    transformLineToAccumulators,
-    transformLineInPolygon,
-    vertsToGeometry,
-} from '../geom_utils/generatePolygonGeometry';
+    classifyRings,
+    clipPolygon,
+    appendFlatPolygon,
+    appendExtrudedPolygon,
+} from '../geom_utils/polygonGeometry.js';
 
 
 const TILE_BORDER_MATERIAL = new THREE.LineBasicMaterial({
     color: 0x00ff00, depthTest: false, transparent: true, opacity: 0.8,
 });
 
+const BORDER_Y = 0.01;
 
+/** Height used for buildings without height data, in metres. */
+const DEFAULT_BUILDING_HEIGHT_M = 10;
+
+/** Line simplification tolerance, as a fraction of the tile extent. */
+const LINE_SIMPLIFY_TOLERANCE = 2 / 4096;
+
+/**
+ * Polygons are clipped to the tile plus this margin (fraction of the extent):
+ * the tiny overlap avoids hairline cracks between neighbouring tiles.
+ */
+const CLIP_MARGIN = 1 / 4096;
+
+/**
+ * @typedef {Object} TileBuildContext
+ * @property {import('../style/MapStyle.js').MapStyle} mapStyle
+ * @property {number}  tileWorldSize - World size of a tile when built.
+ * @property {number}  zoomScale     - {@link MapConfig#zoomScaleFactor}.
+ * @property {number}  unitsPerMeter - World units per metre at the map origin.
+ * @property {boolean} showBorders
+ * @property {import('./MeshBatches.js').MeshBatches} batches - Where the tile geometry is drawn.
+ * @property {string|Function} [tileSchema] - {@link MapConfig#tileSchema}.
+ * @property {string[]} [sourceLayers]      - Layer names announced by the tile source.
+ */
+
+/**
+ * One map tile: holds the raw MVT payload and builds its geometry.
+ *
+ * Geometry is built in tile-local coordinates (the tile spans `[0, size]` on
+ * X and Z) and handed to the shared {@link MeshBatches}; the tile transform
+ * (position + scale) is applied per instance, so moving or rescaling a tile
+ * never touches its vertices.
+ */
 export class Tile {
 
-    tileMeshes   = [];
-    #positionXY  = null;
-    #scene       = null;
-    #mapconfig   = null;
-    #tileData    = null;
-    #borderLines = null;
+    /** @type {Uint8Array|null} */
+    #payload;
 
-    constructor(positionXY, tileData, scene, mapconfig) {
-        this.#positionXY = positionXY;
-        this.#scene      = scene;
-        this.#mapconfig  = mapconfig;
-        this.#tileData   = tileData;
+    /** @type {THREE.Group} */
+    #group = new THREE.Group();
+
+    /** @type {import('./MeshBatches.js').BatchHandle[]} */
+    #handles = [];
+
+    /** @type {THREE.Line|null} */
+    #border = null;
+
+    /** World tile size the current geometry was built with. */
+    #builtSize = 1;
+
+    /**
+     * @param {Uint8Array} payload - Raw MVT bytes.
+     */
+    constructor(payload) {
+        this.#payload                = payload;
+        this.#group.name             = 'ThreeGeoPlayTile';
+        this.#group.matrixAutoUpdate = false;
     }
 
-    async render() {
-        let protoTile;
-        try {
-            protoTile = deserializeMVT(this.#tileData);
-        } catch (err) {
-            console.error('ThreeGeoPlay: deserialization error:', err);
-            return;
-        }
+    /** @type {THREE.Group} */
+    get object3D() { return this.#group; }
 
-        const collector = new TileFeatureCollector(this.#positionXY, this.#mapconfig);
-        const result    = collector.collect(protoTile);
-        if (!result) return;
+    /**
+     * (Re)builds all meshes from the payload using the current style.
+     * The previous meshes are replaced only once the new ones are ready.
+     *
+     * @param {TileBuildContext} ctx
+     */
+    build(ctx) {
+        const collector = new TileFeatureCollector(ctx.mapStyle, ctx.tileSchema, ctx.sourceLayers);
+        const layers    = decodeVectorTile(this.#payload, collector.acceptsLayer);
+        const { lines, polygons, buildings } = collector.collect(layers);
 
-        this.#buildLineMeshes(result.lineGroups);
-        this.#buildPolygonMeshes(result.polygonGroups);
-        this.#buildBorderLines();
-    }
-
-    updateBorderVisibility() {
-        if (this.#mapconfig.showTileBorders) {
-            if (!this.#borderLines) this.#buildBorderLines();
-        } else if (this.#borderLines) {
-            this.#scene.remove(this.#borderLines);
-            this.#borderLines.geometry.dispose();
-            this.#borderLines = null;
-        }
-    }
-
-    scaleMeshes(ratio) {
-        for (const mesh of this.tileMeshes) mesh.scale.multiplyScalar(ratio);
-        this.#borderLines?.scale.multiplyScalar(ratio);
-    }
-
-    refreshMaterials() {
-        for (const mesh of this.tileMeshes) {
-            const { featureClass, isOutline, layerName } = mesh.userData;
-            if (!featureClass) continue;
-            const style = this.#mapconfig.mapStyle
-                .getStyleLayerByName(layerName)
-                ?.getTypeByName(featureClass);
-            if (!style) continue;
-            mesh.material = isOutline ? style.outlineMaterial : style.material;
-        }
-    }
-
-    destroy() {
-        for (const mesh of this.tileMeshes) {
-            this.#scene.remove(mesh);
-            mesh.geometry?.dispose();
-        }
-        if (this.#borderLines) {
-            this.#scene.remove(this.#borderLines);
-            this.#borderLines.geometry.dispose();
-            this.#borderLines = null;
-        }
-        this.tileMeshes = [];
-    }
-
-
-    #buildBorderLines() {
-        const [wx, wz] = this.#positionXY;
-        const size = this.#mapconfig.tileWorldSize;
-        const y    = 0.01;
-        const corners = new Float32Array([
-            wx,        y, wz,
-            wx + size, y, wz,
-            wx + size, y, wz + size,
-            wx,        y, wz + size,
-            wx,        y, wz,
-        ]);
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.BufferAttribute(corners, 3));
-        this.#borderLines         = new THREE.Line(geo, TILE_BORDER_MATERIAL);
-        this.#borderLines.visible = this.#mapconfig.showTileBorders;
-        this.#scene.add(this.#borderLines);
-    }
-
-
-    #buildLineMeshes(lineGroups) {
-
-       
-        if (lineGroups.length === 0) return;
-
-        const tileSize  = this.#mapconfig.tileWorldSize;
-        const zoomScale = this.#mapconfig.zoomScaleFactor;
-
-        // Map<material, { verts: [], order }>
-        const outlineVerts = new Map();
-        const fillVerts    = new Map();
-
-        const getOrCreate = (map, material, order) => {
-            if (!map.has(material)) {
-                map.set(material, { verts: [], order: order ?? 0 });
+        const size    = ctx.tileWorldSize;
+        const batches = new Map();
+        const batchFor = (kind, material, renderOrder) => {
+            const key = `${kind}|${material.id}|${renderOrder}`;
+            let batch = batches.get(key);
+            if (!batch) {
+                batch = { kind, material, renderOrder, out: new FloatArrayBuilder() };
+                batches.set(key, batch);
             }
-            return map.get(material).verts;
+            return batch.out;
         };
 
         for (const group of lineGroups) {
