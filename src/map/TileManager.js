@@ -1,41 +1,95 @@
-import { geoToTileXY, geoToTileXYFloat } from '../geo_utils/projection.js';
-import { TileLayout }                    from '../config/MapConfig.js';
-import fetchTileData                     from '../utils/fetchTileData.js';
-import { Tile }                          from './Tile.js';
-import * as THREE                        from 'three';
+import * as THREE from 'three';
 
+import { geoToTileXYFloat, tileSizeInMeters } from '../geo_utils/projection.js';
+import { TileLayout }                         from '../config/MapConfig.js';
+import fetchTileData                          from '../utils/fetchTileData.js';
+import { isTileTemplate, resolveTileSource, templateSource, redactToken } from '../utils/tileSource.js';
+import { Tile }                               from './Tile.js';
+import { MeshBatches }                        from './MeshBatches.js';
+
+/** Maximum number of tile downloads in flight. */
+const MAX_CONCURRENT_FETCHES = 16;
+
+/** Attempts per tile before giving up (until it leaves and re-enters the render area). */
+const MAX_FETCH_ATTEMPTS = 5;
+const RETRY_BASE_DELAY_MS = 1000;
+const RETRY_MAX_DELAY_MS  = 16000;
+
+/**
+ * Tiles are built in time slices of this length, yielding to the browser in
+ * between, so a burst of downloaded tiles never freezes the frame loop.
+ */
+const BUILD_BUDGET_MS = 8;
+
+const now = typeof performance !== 'undefined' ? () => performance.now() : () => Date.now();
+
+/** @enum {number} */
+const State = Object.freeze({
+    QUEUED:   0, // waiting for a download slot
+    LOADING:  1, // download in flight
+    WAITING:  2, // waiting to retry a failed download
+    LOADED:   3, // payload available, first build pending
+    READY:    4, // meshes on screen
+    EMPTY:    5, // no data for this tile
+    FAILED:   6, // gave up (download or build error)
+});
+
+/**
+ * @typedef {Object} TileRecord
+ * @property {string} key
+ * @property {number} tx
+ * @property {number} ty
+ * @property {State}  state
+ * @property {number} attempts
+ * @property {AbortController|null} controller
+ * @property {ReturnType<typeof setTimeout>|null} retryTimer
+ * @property {Tile|null} tile
+ * @property {boolean} buildPending
+ */
+
+/**
+ * Loads, builds, places and disposes the tiles around the current map center.
+ *
+ * Changes are requested through {@link setCenterPosition}, {@link configChanged}
+ * and {@link restyle}, and applied together by {@link update} (called once per
+ * frame by {@link ThreeGeoPlay#onFrameUpdate}).
+ *
+ * @private
+ */
 export class TileManager {
 
-    #mapConfig = null;
+    /** @type {import('../config/MapConfig.js').MapConfig} */
+    #config;
 
-    #originLatLon = null;
+    /** @type {THREE.Object3D} */
+    #root;
 
-    #zoomLevel = null;
+    // Snapshot of the source / origin currently in use.
+    #zoom = 0;
 
-    #tileProviderUrl = null;
+    /** @type {import('../utils/tileSource.js').TileSource|null} Resolved tile source (null while loading). */
+    #source = null;
+    #sourceKey = null;
+    /** @type {AbortController|null} */
+    #sourceRequest = null;
+    #sourceRetry = null;
+    #sourceAttempts = 0;
+    #zoomWarned = null;
+    #originFX = 0;
+    #originFY = 0;
+    #unitsPerMeter = 1;
 
-    #originTileX = null;
+    /** @type {{ x: number, z: number } | null} World position the map is centered on (`null` = origin). */
+    #centerPos = null;
+    #centerTX = null;
+    #centerTY = null;
 
-    #originTileY = null;
+    /** @type {Map<string, TileRecord>} */
+    #tiles = new Map();
 
-    #scene = null;
-
-    #subTileOffsetX = 0;
-
-    #subTileOffsetY = 0;
-
-    #lastCenterTileX = null;
-
-    #lastCenterTileY = null;
-
-    #lastTileWorldSize = null;
-
-    #doneTiles = new Map();
-
-    #pendingTiles = new Map();
-
+    /** @type {TileRecord[]} Sorted farthest-first, so `pop()` returns the nearest tile. */
     #fetchQueue = [];
-
+    #fetchQueueSorted = true;
     #activeFetches = 0;
 
     #maxConcurrentFetches = 100;
