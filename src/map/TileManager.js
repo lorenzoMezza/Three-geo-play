@@ -92,46 +92,341 @@ export class TileManager {
     #fetchQueueSorted = true;
     #activeFetches = 0;
 
-    #maxConcurrentFetches = 100;
+    /** @type {TileRecord[]} */
+    #buildQueue = [];
+    #buildTimer = null;
 
+    /** @type {THREE.Mesh|null} */
     #groundMesh = null;
 
-    constructor(mapConfig, scene) {
-        this.#mapConfig         = mapConfig;
-        this.#originLatLon      = mapConfig.originLatLon;
-        this.#zoomLevel         = mapConfig.zoomLevel;
-        this.#tileProviderUrl   = mapConfig.pbfTileProviderZXYurl;
-        this.#scene             = scene;
-        this.#lastTileWorldSize = mapConfig.tileWorldSize;
+    /** @type {MeshBatches} */
+    #batches;
 
-        this.#initGroundMesh();
+    #pending = { reset: true, origin: true, placement: true, needed: true, borders: false, restyle: false };
+    #warnedStatuses = new Set();
+    #destroyed = false;
+
+    /** @type {(type: 'sourceload'|'sourceerror', detail: Object) => void} */
+    #notify;
+
+    /**
+     * @param {import('../config/MapConfig.js').MapConfig} mapConfig
+     * @param {THREE.Object3D} root - Parent object of all map meshes.
+     * @param {(type: 'sourceload'|'sourceerror', detail: Object) => void} [notify] - Tile source events.
+     */
+    constructor(mapConfig, root, notify = () => {}) {
+        this.#config  = mapConfig;
+        this.#root    = root;
+        this.#notify  = notify;
+        this.#batches = new MeshBatches(root);
     }
 
-    #initGroundMesh() {
-        const style = this.#mapConfig.mapStyle.getStyleLayerByName('background');
-        if (style.isVisible) {
-            const material = style?.material;
+    // ─── Requests (applied by update) ─────────────────────────────────────────
 
-            const geo        = new THREE.PlaneGeometry(1, 1);
-            this.#groundMesh = new THREE.Mesh(geo, material);
-            this.#groundMesh.rotation.x = -Math.PI / 2;
-            this.#groundMesh.position.y = style?.Y ?? 0;
+    /**
+     * World position (X/Z) the map should be centered on; `null` centers it on the origin.
+     * @param {{ x: number, z: number } | null} position
+     */
+    setCenterPosition(position) {
+        this.#centerPos = position ? { x: position.x, z: position.z } : null;
+    }
 
-            if (style.renderingOrder !== undefined && style.renderingOrder !== null) {
-                this.#groundMesh.material.depthTest = false;
-                this.#groundMesh.renderOrder        = style.renderingOrder;
+    /** @returns {{ x: number, z: number } | null} */
+    get centerPosition() {
+        return this.#centerPos ? { ...this.#centerPos } : null;
+    }
+
+    /**
+     * Loading progress of the tiles in the current render area.
+     * @returns {{ total: number, ready: number, empty: number, loading: number, failed: number }}
+     */
+    get stats() {
+        const stats = { total: this.#tiles.size, ready: 0, empty: 0, loading: 0, failed: 0 };
+        for (const record of this.#tiles.values()) {
+            if (record.state === State.READY)       stats.ready++;
+            else if (record.state === State.EMPTY)  stats.empty++;
+            else if (record.state === State.FAILED) stats.failed++;
+            else                                    stats.loading++;
+        }
+        return stats;
+    }
+
+    /**
+     * Notifies the manager of modified {@link MapConfig} fields.
+     * @param {Set<string>} fields
+     */
+    configChanged(fields) {
+        const p = this.#pending;
+        if (fields.has('zoomLevel') || fields.has('tileUrl') || fields.has('accessToken')) p.reset = true;
+        if (fields.has('originLatLon'))                                      p.origin = true;
+        if (fields.has('tileWorldSize') || fields.has('worldOriginOffset'))  p.placement = true;
+        if (fields.has('renderDistance') || fields.has('tileLayout'))        p.needed = true;
+        if (fields.has('showTileBorders'))                                   p.borders = true;
+        if (fields.has('mapStyle') || fields.has('tileSchema'))              p.restyle = true;
+    }
+
+    /**
+     * The resolved tile source, or `null` while it is loading.
+     * @returns {import('../utils/tileSource.js').TileSource|null}
+     */
+    get source() {
+        return this.#source ? { ...this.#source, tiles: [...this.#source.tiles], layers: [...this.#source.layers] } : null;
+    }
+
+    /**
+     * Rebuilds every loaded tile (and the ground) with the current style.
+     */
+    restyle() {
+        this.#pending.restyle = true;
+    }
+
+    // ─── Frame update ─────────────────────────────────────────────────────────
+
+    /**
+     * Applies all pending changes.
+     */
+    update() {
+        if (this.#destroyed) return;
+        const cfg = this.#config;
+        const p   = this.#pending;
+
+        if (p.reset) {
+            for (const record of this.#tiles.values()) this.#discard(record);
+            this.#tiles.clear();
+            this.#fetchQueue   = [];
+            this.#buildQueue   = [];
+            this.#zoom         = cfg.zoomLevel;
+            if (this.#sourceKey !== `${cfg.tileUrl}\n${cfg.accessToken}`) this.#resolveSource();
+            else this.#checkZoomRange();
+            this.#centerTX     = null;
+            this.#centerTY     = null;
+            p.origin = true;
+        }
+
+        if (p.origin) {
+            const { lat, lon } = cfg.originLatLon;
+            [this.#originFX, this.#originFY] = geoToTileXYFloat(lon, lat, this.#zoom);
+            p.placement = true;
+        }
+
+        if (p.placement) {
+            // Used for new builds only: a tileWorldSize change rescales existing tiles
+            // uniformly (heights included), so they stay consistent without a rebuild.
+            this.#unitsPerMeter = cfg.tileWorldSize / tileSizeInMeters(cfg.originLatLon.lat, this.#zoom);
+            for (const record of this.#tiles.values()) {
+                if (record.state === State.READY) this.#place(record);
             }
+        }
 
-            this.#scene.add(this.#groundMesh);
+        const size   = cfg.tileWorldSize;
+        const offset = cfg.worldOriginOffset;
+        const center = this.#centerPos ?? offset;
+        const cx     = Math.floor(this.#originFX + (center.x - offset.x) / size);
+        const cy     = Math.floor(this.#originFY + (center.z - offset.z) / size);
+        const centerMoved = cx !== this.#centerTX || cy !== this.#centerTY;
+
+        if (centerMoved || p.needed) {
+            this.#centerTX = cx;
+            this.#centerTY = cy;
+            this.#applyNeededTiles();
+        }
+
+        if (p.borders) {
+            for (const record of this.#tiles.values()) {
+                if (record.state === State.READY) record.tile.setBorderVisible(cfg.showTileBorders);
+            }
+        }
+
+        if (p.restyle) {
+            for (const record of this.#tiles.values()) {
+                if (record.state === State.READY) this.#enqueueBuild(record);
+            }
+        }
+
+        if (p.restyle || p.placement || p.needed || centerMoved) this.#syncGround(p.restyle);
+
+        p.reset = p.origin = p.placement = p.needed = p.borders = p.restyle = false;
+    }
+
+    /**
+     * Aborts downloads, disposes every tile and the ground mesh.
+     * The instance cannot be used afterwards.
+     */
+    destroy() {
+        if (this.#destroyed) return;
+        this.#destroyed = true;
+        this.#sourceRequest?.abort();
+        if (this.#sourceRetry !== null) clearTimeout(this.#sourceRetry);
+        for (const record of this.#tiles.values()) this.#discard(record);
+        this.#tiles.clear();
+        this.#fetchQueue = [];
+        this.#buildQueue = [];
+        if (this.#buildTimer !== null) {
+            clearTimeout(this.#buildTimer);
+            this.#buildTimer = null;
+        }
+        if (this.#groundMesh) {
+            this.#groundMesh.removeFromParent();
+            this.#groundMesh.geometry.dispose();
+            this.#groundMesh = null;
+        }
+        this.#batches.dispose();
+    }
+
+    // ─── Tile set ─────────────────────────────────────────────────────────────
+
+    #applyNeededTiles() {
+        const cfg        = this.#config;
+        const R          = cfg.renderDistance;
+        const isCircular = cfg.tileLayout === TileLayout.CIRCULAR;
+        const r2         = R * R;
+        const cx         = this.#centerTX;
+        const cy         = this.#centerTY;
+        const tileCount  = 2 ** this.#zoom;
+
+        const needed = new Map();
+        for (let ty = cy - R; ty <= cy + R; ty++) {
+            if (ty < 0 || ty >= tileCount) continue; // beyond the poles
+            for (let tx = cx - R; tx <= cx + R; tx++) {
+                if (isCircular) {
+                    const ccx = cx + 0.5;
+                    const ccy = cy + 0.5;
+                    const dx  = Math.max(tx, Math.min(ccx, tx + 1)) - ccx;
+                    const dy  = Math.max(ty, Math.min(ccy, ty + 1)) - ccy;
+                    if (dx * dx + dy * dy > r2) continue;
+                }
+                needed.set(`${tx}/${ty}`, [tx, ty]);
+            }
+        }
+
+        for (const [key, record] of this.#tiles) {
+            if (!needed.has(key)) {
+                this.#discard(record);
+                this.#tiles.delete(key);
+            }
+        }
+
+        for (const [key, [tx, ty]] of needed) {
+            if (this.#tiles.has(key)) continue;
+            const record = {
+                key, tx, ty,
+                state:        State.QUEUED,
+                attempts:     0,
+                controller:   null,
+                retryTimer:   null,
+                tile:         null,
+                buildPending: false,
+            };
+            this.#tiles.set(key, record);
+        }
+
+        this.#fetchQueue = [];
+        for (const record of this.#tiles.values()) {
+            if (record.state === State.QUEUED) this.#fetchQueue.push(record);
+        }
+        this.#fetchQueueSorted = false;
+        this.#drainFetchQueue();
+
+        // Build the nearest tiles first after the center moved.
+        this.#buildQueue.sort(this.#fartherFirst);
+    }
+
+    /** Releases everything held by a record that left the render area. */
+    #discard(record) {
+        record.controller?.abort();
+        record.controller = null;
+        if (record.retryTimer !== null) {
+            clearTimeout(record.retryTimer);
+            record.retryTimer = null;
+        }
+        record.tile?.dispose();
+        record.tile = null;
+        record.buildPending = false;
+    }
+
+    #isCurrent(record) {
+        return !this.#destroyed && this.#tiles.get(record.key) === record;
+    }
+
+    #fartherFirst = (a, b) => this.#distanceSq(b) - this.#distanceSq(a);
+
+    #distanceSq(record) {
+        const dx = record.tx - this.#centerTX;
+        const dy = record.ty - this.#centerTY;
+        return dx * dx + dy * dy;
+    }
+
+    #place(record) {
+        const cfg    = this.#config;
+        const size   = cfg.tileWorldSize;
+        const offset = cfg.worldOriginOffset;
+        record.tile.place(
+            (record.tx - this.#originFX) * size + offset.x,
+            (record.ty - this.#originFY) * size + offset.z,
+            size,
+        );
+    }
+
+    // ─── Downloads ────────────────────────────────────────────────────────────
+
+    // ─── Tile source ──────────────────────────────────────────────────────────
+
+    /** Resolves `tileUrl` (template, TileJSON, style or mapbox://); downloads wait for it. */
+    #resolveSource() {
+        const { tileUrl, accessToken } = this.#config;
+        this.#sourceKey = `${tileUrl}\n${accessToken}`;
+        this.#sourceRequest?.abort();
+        this.#sourceRequest = null;
+        if (this.#sourceRetry !== null) clearTimeout(this.#sourceRetry);
+        this.#sourceRetry = null;
+        this.#source = null;
+
+        if (isTileTemplate(tileUrl)) {
+            this.#source = templateSource(tileUrl, accessToken);
+            this.#checkZoomRange();
+            this.#notify('sourceload', { source: this.source });
+            return;
+        }
+
+        const request = new AbortController();
+        this.#sourceRequest = request;
+        resolveTileSource(tileUrl, { accessToken, signal: request.signal }).then(source => {
+            if (this.#sourceRequest !== request || this.#destroyed) return;
+            this.#sourceRequest  = null;
+            this.#sourceAttempts = 0;
+            this.#source         = source;
+            this.#checkZoomRange();
+            this.#notify('sourceload', { source: this.source });
+            this.#drainFetchQueue();
+        }, err => {
+            if (this.#sourceRequest !== request || this.#destroyed || err?.name === 'AbortError') return;
+            this.#sourceRequest = null;
+            this.#notify('sourceerror', { error: err, willRetry: !err?.permanent });
+            if (err?.permanent) {
+                console.error(err.message);
+                return;
+            }
+            const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** this.#sourceAttempts++, RETRY_MAX_DELAY_MS * 2);
+            console.warn(`ThreeGeoPlay: could not load the tile source (${err?.message ?? err}), retrying in ${(delay / 1000).toFixed(0)}s`);
+            this.#sourceRetry = setTimeout(() => { this.#sourceRetry = null; this.#resolveSource(); }, delay);
+        });
+    }
+
+    #checkZoomRange() {
+        const source = this.#source;
+        if (!source || this.#zoomWarned === this.#zoom) return;
+        if (this.#zoom > source.maxZoom || this.#zoom < source.minZoom) {
+            this.#zoomWarned = this.#zoom;
+            console.warn(`ThreeGeoPlay: zoomLevel ${this.#zoom} is outside the zoom range of the tile source (${source.minZoom}–${source.maxZoom}): tiles will be missing. Use a zoomLevel in that range.`);
         }
     }
 
-    #updateGroundMesh(centerWorldX, centerWorldZ) {
-        if (!this.#groundMesh) return;
-        const size = (this.#mapConfig.renderDistance * 2 + 1) * this.#mapConfig.tileWorldSize;
-        this.#groundMesh.scale.set(size, size, 1);
-        this.#groundMesh.position.x = centerWorldX;
-        this.#groundMesh.position.z = centerWorldZ;
+    #tileUrl(x, y) {
+        const templates = this.#source.tiles;
+        return templates[(x + y) % templates.length]
+            .replaceAll('{z}', String(this.#zoom))
+            .replaceAll('{x}', String(x))
+            .replaceAll('{y}', String(y));
     }
 
     async init() {
