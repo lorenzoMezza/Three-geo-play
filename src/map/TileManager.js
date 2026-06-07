@@ -429,250 +429,174 @@ export class TileManager {
             .replaceAll('{y}', String(y));
     }
 
-    async init() {
-        const { lon, lat } = this.#originLatLon;
-        const zoom         = this.#zoomLevel;
+    // ─── Downloads (continued) ────────────────────────────────────────────────
 
-
-
-        if (lon < -180 || lon > 180)             console.warn('ThreeGeoPlay: lon out of range [-180, 180]:', lon);
-        if (lat < -85.051129 || lat > 85.051129) console.warn('ThreeGeoPlay: lat out of range[-85.05, 85.05]:', lat);
-
-        const [ox, oy] = geoToTileXY(lon, lat, zoom);
-   
-
-        if (isNaN(ox) || isNaN(oy)) {
-            console.error('ThreeGeoPlay: tile origine NaN');
-            return;
+    #drainFetchQueue() {
+        if (!this.#source) return;
+        if (!this.#fetchQueueSorted) {
+            this.#fetchQueue.sort(this.#fartherFirst);
+            this.#fetchQueueSorted = true;
         }
-
-        const maxTile = 2 ** zoom;
-        if (ox < 0 || oy < 0)              console.warn('ThreeGeoPlay: negative tile origin');
-        if (ox >= maxTile || oy >= maxTile) console.warn('ThreeGeoPlay: tile origin out of OSM grid');
-
-        this.#originTileX = ox;
-        this.#originTileY = oy;
-
-        const [fox, foy]     = geoToTileXYFloat(lon, lat, zoom);
-        this.#subTileOffsetX = fox - ox;
-        this.#subTileOffsetY = foy - oy;
-
-
-        this.#applyCenter(ox, oy);
-    }
-
-    updateCenter(lat, lon) {
-        const [cx, cy] = geoToTileXY(lon, lat, this.#zoomLevel);
-        this.#applyCenter(cx, cy);
-    }
-
-    updateCenterFromPosition(x, z) {
-        const { originLatLon, tileWorldSize, zoomLevel, worldOriginOffset: offset } = this.#mapConfig;
-        const [ox, oy] = geoToTileXY(originLatLon.lon, originLatLon.lat, zoomLevel);
-        const cx = Math.floor(ox + (x - offset.x) / tileWorldSize);
-        const cy = Math.floor(oy + (z - offset.z) / tileWorldSize);
-
-        if (cx === this.#lastCenterTileX && cy === this.#lastCenterTileY) return;
-        this.#lastCenterTileX = cx;
-        this.#lastCenterTileY = cy;
-        this.#applyCenter(cx, cy);
-    }
-
-    updateBorders() {
-        for (const [, entry] of this.#doneTiles) {
-            entry.tile?.updateBorderVisibility();
+        while (this.#activeFetches < MAX_CONCURRENT_FETCHES && this.#fetchQueue.length > 0) {
+            const record = this.#fetchQueue.pop();
+            if (this.#isCurrent(record) && record.state === State.QUEUED) this.#fetch(record);
         }
     }
 
-    rescaleTiles(newSize) {
-        if (!this.#lastTileWorldSize || this.#lastTileWorldSize === newSize) return;
-        const ratio = newSize / this.#lastTileWorldSize;
-        for (const [, entry] of this.#doneTiles) {
-            entry.tile?.scaleMeshes(ratio);
-        }
-        this.#lastTileWorldSize = newSize;
+    async #fetch(record) {
+        const controller  = new AbortController();
+        record.controller = controller;
+        record.state      = State.LOADING;
+        this.#activeFetches++;
 
-        if (this.#lastCenterTileX !== null) {
-            const offset = this.#mapConfig.worldOriginOffset;
-            const dx     = this.#lastCenterTileX - this.#originTileX;
-            const dy     = this.#lastCenterTileY - this.#originTileY;
-            const cx     = (dx - this.#subTileOffsetX) * newSize + offset.x;
-            const cz     = (dy - this.#subTileOffsetY) * newSize + offset.z;
-            this.#updateGroundMesh(cx, cz);
+        const tileCount = 2 ** this.#zoom;
+        const x = ((record.tx % tileCount) + tileCount) % tileCount; // wrap across the antimeridian
+        const url = this.#tileUrl(x, record.ty);
+
+        try {
+            const result = await fetchTileData(url, controller.signal);
+            if (!this.#isCurrent(record)) return;
+
+            if (result.status === 'ok') {
+                record.tile  = new Tile(result.payload);
+                record.state = State.LOADED;
+                this.#enqueueBuild(record);
+            } else {
+                record.state = State.EMPTY;
+                if (result.status === 'unavailable') this.#warnUnavailable(result.httpStatus, url);
+            }
+        } catch (err) {
+            if (err?.name === 'AbortError' || !this.#isCurrent(record)) return;
+
+            record.attempts++;
+            if (record.attempts >= MAX_FETCH_ATTEMPTS) {
+                record.state = State.FAILED;
+                console.error(`ThreeGeoPlay: giving up on tile ${this.#zoom}/${x}/${record.ty} after ${record.attempts} attempts`, err);
+                return;
+            }
+
+            const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** (record.attempts - 1), RETRY_MAX_DELAY_MS)
+                        * (0.75 + Math.random() * 0.5);
+            console.warn(`ThreeGeoPlay: tile ${this.#zoom}/${x}/${record.ty} failed (${err?.message ?? err}), retrying in ${(delay / 1000).toFixed(1)}s`);
+            record.state      = State.WAITING;
+            record.retryTimer = setTimeout(() => {
+                record.retryTimer = null;
+                if (!this.#isCurrent(record)) return;
+                record.state = State.QUEUED;
+                this.#fetchQueue.push(record);
+                this.#fetchQueueSorted = false;
+                this.#drainFetchQueue();
+            }, delay);
+        } finally {
+            if (record.controller === controller) record.controller = null;
+            this.#activeFetches--;
+            if (!this.#destroyed) this.#drainFetchQueue();
         }
     }
 
-    applyCenter() {
-        if (this.#lastCenterTileX === null || this.#originTileX === null) {
-            return;
-        }
-        this.#applyCenter(this.#lastCenterTileX, this.#lastCenterTileY);
+    #warnUnavailable(status, url) {
+        if (this.#warnedStatuses.has(status)) return;
+        this.#warnedStatuses.add(status);
+        const hint = status === 401 || status === 403
+            ? 'check the API key / access token of tileUrl'
+            : 'tiles outside the provider coverage or zoom range are treated as empty';
+        console.warn(`ThreeGeoPlay: tile provider answered HTTP ${status} for ${redactToken(url)} (${hint}). Further ${status} responses will not be logged.`);
     }
 
-    updateMaterials() {
-        for (const [, entry] of this.#doneTiles) {
-            entry.tile?.refreshMaterials();
-        }
-        const style = this.#mapConfig.mapStyle.getStyleLayerByName('background');
-        if (style?.material && this.#groundMesh) {
-            this.#groundMesh.material = style.material;
-        }
+    // ─── Geometry building ────────────────────────────────────────────────────
+
+    #enqueueBuild(record) {
+        if (record.buildPending) return;
+        record.buildPending = true;
+        this.#buildQueue.push(record);
+        this.#buildQueue.sort(this.#fartherFirst);
+        if (this.#buildTimer === null) this.#buildTimer = setTimeout(this.#runBuildSlice, 0);
     }
 
-    #applyCenter(centerTileX, centerTileY) {
-        const renderDistance = this.#mapConfig.renderDistance;
-        const tileWorldSize  = this.#mapConfig.tileWorldSize;
-        const offset         = this.#mapConfig.worldOriginOffset;
-        const isCircular     = this.#mapConfig.tileLayout === TileLayout.CIRCULAR;
-        const r2             = renderDistance * renderDistance;
+    #runBuildSlice = () => {
+        this.#buildTimer = null;
+        if (this.#destroyed) return;
 
-        const needed = new Map();
-        for (let tx = centerTileX - renderDistance; tx <= centerTileX + renderDistance; tx++) {
-            for (let ty = centerTileY - renderDistance; ty <= centerTileY + renderDistance; ty++) {
-                const cdx = tx - centerTileX;
-                const cdy = ty - centerTileY;
+        const cfg = this.#config;
+        const ctx = {
+            mapStyle:      cfg.mapStyle,
+            tileWorldSize: cfg.tileWorldSize,
+            zoomScale:     2 ** (this.#zoom - 18),
+            unitsPerMeter: this.#unitsPerMeter,
+            showBorders:   cfg.showTileBorders,
+            batches:       this.#batches,
+            tileSchema:    cfg.tileSchema,
+            sourceLayers:  this.#source?.layers ?? [],
+        };
 
-                if (isCircular) {
-                    const cx       = centerTileX + 0.5;
-                    const cy       = centerTileY + 0.5;
-                    const nearestX = Math.max(tx, Math.min(cx, tx + 1));
-                    const nearestZ = Math.max(ty, Math.min(cy, ty + 1));
-                    const dx       = nearestX - cx;
-                    const dz       = nearestZ - cy;
-                    if (dx * dx + dz * dz > r2) continue;
+        const start = now();
+        while (this.#buildQueue.length > 0 && now() - start < BUILD_BUDGET_MS) {
+            const record = this.#buildQueue.pop();
+            if (!record.buildPending || !this.#isCurrent(record) || !record.tile) continue;
+            record.buildPending = false;
+
+            try {
+                record.tile.build(ctx);
+                this.#place(record);
+                if (record.state !== State.READY) {
+                    this.#root.add(record.tile.object3D);
+                    record.state = State.READY;
                 }
-
-                const dx  = tx - this.#originTileX;
-                const dy  = ty - this.#originTileY;
-                const key = `${dx}_${dy}`;
-
-                const worldX = (dx - this.#subTileOffsetX) * tileWorldSize + offset.x;
-                const worldZ = (dy - this.#subTileOffsetY) * tileWorldSize + offset.z;
-
-                needed.set(key, { tx, ty, worldX, worldZ, dist: cdx * cdx + cdy * cdy });
+            } catch (err) {
+                console.error(`ThreeGeoPlay: tile ${this.#zoom}/${record.tx}/${record.ty} could not be built`, err);
+                record.tile.dispose();
+                record.tile  = null;
+                record.state = State.FAILED;
             }
         }
 
-        const centerWorldX = (centerTileX - this.#originTileX - this.#subTileOffsetX + 0.5) * tileWorldSize + offset.x;
-        const centerWorldZ = (centerTileY - this.#originTileY - this.#subTileOffsetY + 0.5) * tileWorldSize + offset.z;
-        this.#updateGroundMesh(centerWorldX, centerWorldZ);
+        if (this.#buildQueue.length > 0) this.#buildTimer = setTimeout(this.#runBuildSlice, 0);
+    };
 
-        for (const [key, controller] of this.#pendingTiles) {
-            if (!needed.has(key)) {
-                controller.abort();
-                this.#pendingTiles.delete(key);
+    // ─── Ground ───────────────────────────────────────────────────────────────
+
+    /** Creates, updates or removes the background plane under the loaded tiles. */
+    #syncGround(styleChanged) {
+        const cfg   = this.#config;
+        const style = cfg.mapStyle.getStyleLayerByName('background');
+
+        if (!style?.isVisible || !style.material) {
+            if (this.#groundMesh) {
+                this.#groundMesh.removeFromParent();
+                this.#groundMesh.geometry.dispose();
+                this.#groundMesh = null;
             }
-        }
-
-        for (const [key, entry] of this.#doneTiles) {
-            if (!needed.has(key)) {
-                entry.dispose();
-                this.#doneTiles.delete(key);
-            }
-        }
-
-        this.#fetchQueue = [];
-        for (const [key, data] of needed) {
-            if (!this.#doneTiles.has(key) && !this.#pendingTiles.has(key)) {
-                this.#fetchQueue.push({ key, ...data });
-            }
-        }
-        this.#fetchQueue.sort((a, b) => a.dist - b.dist);
-
-        this.#drainQueue();
-    }
-
-    #drainQueue() {
-        while (this.#activeFetches < this.#maxConcurrentFetches && this.#fetchQueue.length > 0) {
-            const item = this.#fetchQueue.shift();
-            if (this.#doneTiles.has(item.key) || this.#pendingTiles.has(item.key)) continue;
-            this.#activeFetches++;
-            this.#fetchTile(item);
-        }
-    }
-
-
-async #fetchTile({ key, tx, ty, worldX, worldZ }) {
-    const controller = new AbortController();
-    this.#pendingTiles.set(key, controller);
-
-    const url = this.#tileProviderUrl
-        .replace('{z}', this.#zoomLevel)
-        .replace('{x}', tx)
-        .replace('{y}', ty);
-
-    let result;
-
-    try {
-
-        try {
-            result = await fetchTileData(url, key, controller.signal);
-        } catch (err) {
-            if (err.name === 'AbortError') {
-                return; 
-            }
-
-            console.error(`ThreeGeoPlay: Fetch ${tx}/${ty} failed, retrying in 3 or 5 seconds...`, err);
-            const n = Math.floor(Math.random() * 4) + 3;
-            await new Promise(resolve => setTimeout(resolve, n  * 1000));
-
-      
-            if (!this.#pendingTiles.has(key) || controller.signal.aborted) {
-                return;
-            }
-
-  
-            this.#fetchQueue.unshift({ key, tx, ty, worldX, worldZ, dist: 0 });
             return;
         }
 
-        if (!result || this.#doneTiles.has(key) || !this.#pendingTiles.has(key)) {
-            return;
+        if (!this.#groundMesh) {
+            const geometry = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+            this.#groundMesh = new THREE.Mesh(geometry, style.material);
+            this.#groundMesh.name = 'ThreeGeoPlayGround';
+            this.#groundMesh.matrixAutoUpdate = false;
+            this.#root.add(this.#groundMesh);
+            styleChanged = true;
         }
 
-        try {
-            const tile = new Tile(
-                [worldX, worldZ],
-                result.payload,
-                this.#scene,
-                this.#mapConfig
-            );
-
-            await tile.render(controller.signal);
-
-            this.#doneTiles.set(key, {
-                tile,
-                dispose: () => tile.destroy(),
-            });
-
-        } catch (err) {
-            if (err.name === 'AbortError') {
-                return;
+        const ground = this.#groundMesh;
+        if (styleChanged) {
+            ground.material = style.material;
+            const order = style.renderingOrder;
+            if (order !== undefined && order !== null) {
+                ground.material.depthTest = false;
+                ground.renderOrder        = order;
             }
-
-            console.error(`ThreeGeoPlay: Tile ${tx}/${ty} render failed (no retry)`, err);
         }
 
-    } finally {
-
-        this.#pendingTiles.delete(key);
-        this.#activeFetches--;
-        this.#drainQueue();
-    }
-}
-
-    destroy() {
-        for (const [, c] of this.#pendingTiles) c.abort();
-        for (const [, t] of this.#doneTiles)    t.dispose();
-        this.#pendingTiles.clear();
-        this.#doneTiles.clear();
-        this.#fetchQueue    = [];
-        this.#activeFetches = 0;
-
-        if (this.#groundMesh) {
-            this.#scene.remove(this.#groundMesh);
-            this.#groundMesh.geometry.dispose();
-            this.#groundMesh = null;
-        }
+        const size   = cfg.tileWorldSize;
+        const offset = cfg.worldOriginOffset;
+        const extent = (cfg.renderDistance * 2 + 1) * size;
+        ground.position.set(
+            (this.#centerTX - this.#originFX + 0.5) * size + offset.x,
+            style.Y ?? 0,
+            (this.#centerTY - this.#originFY + 0.5) * size + offset.z,
+        );
+        ground.scale.set(extent, 1, extent);
+        ground.updateMatrix();
     }
 }
