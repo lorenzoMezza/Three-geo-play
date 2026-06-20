@@ -1,25 +1,31 @@
-import { MapStyle } from '../style/MapStyle';
+import { MapStyle } from '../style/MapStyle.js';
+import { TileSchema } from '../utils/tileSchemas.js';
 
 /**
+ * Fields whose change discards every loaded tile and downloads them again.
  * @private
- * @type {Readonly<Record<string, boolean>>}
+ * @type {ReadonlySet<string>}
  */
-const REBUILD_REQUIRED_FIELDS = Object.freeze({
-    zoomLevel:             true,
-    pbfTileProviderZXYurl: true,
-    worldOriginOffset:     true,
-    tileLayout:            true,
-    originLatLon:          true,
-});
+const REBUILD_REQUIRED_FIELDS = new Set(['zoomLevel', 'tileUrl', 'accessToken']);
+
+/** Properties accepted by {@link MapConfig#set} and the `ThreeGeoPlay` options. */
+const SETTABLE = new Set([
+    'tileUrl', 'accessToken', 'tileSchema', 'zoomLevel', 'renderDistance', 'tileWorldSize',
+    'tileLayout', 'originLatLon', 'worldOriginOffset', 'viewMode', 'mapStyle',
+    'showTileBorders', 'followUpdateInterval', 'pbfTileProviderZXYurl',
+]);
+
+const MIN_ZOOM = 0;
+const MAX_ZOOM = 24;
 
 /**
  * Available tile layout modes.
  * @enum {string}
  */
 export const TileLayout = Object.freeze({
-    /** Tiles are loaded in a circular pattern around the origin. */
+    /** Tiles are loaded in a circular pattern around the center. */
     CIRCULAR: 'circular',
-    /** Tiles are loaded in a square grid around the origin. */
+    /** Tiles are loaded in a square grid around the center. */
     GRID: 'grid',
 });
 
@@ -29,12 +35,12 @@ export const TileLayout = Object.freeze({
  */
 export const ViewMode = Object.freeze({
     /**
-     * The map origin automatically follows the target set via
+     * The loaded area automatically follows the target set via
      * {@link ThreeGeoPlay#setFollowTarget} (defaults to the camera).
      */
     FOLLOW_TARGET: 'follow_target',
     /**
-     * The map origin is controlled manually via
+     * The loaded area is controlled manually via
      * {@link ThreeGeoPlay#moveMapOriginToLatLon} or
      * {@link ThreeGeoPlay#moveMapOriginToPosition}.
      */
@@ -42,40 +48,43 @@ export const ViewMode = Object.freeze({
 });
 
 /**
- * @typedef {{ lat: number, lon: number }} LatLon
- * @typedef {{ x: number, z: number }} WorldOffset
+ * @typedef {{ readonly lat: number, readonly lon: number }} LatLon
+ * @typedef {{ readonly x: number, readonly z: number }} WorldOffset
  */
 
 /**
  * Configuration for a ThreeGeoPlay map instance.
  * All settable properties mark themselves dirty so that {@link ThreeGeoPlay#onFrameUpdate}
- * can apply the minimum necessary update (rescale, material swap, or full rebuild).
+ * can apply the minimum necessary update (re-layout, restyle, or full reload).
+ * Invalid values throw an `Error`.
  *
  * @example
  * const config = geoPlay.getMapConfig();
- * config.zoomLevel     = 16;
+ * config.zoomLevel      = 16;
  * config.renderDistance = 6;
- * config.tileLayout    = TileLayout.GRID;
+ * config.tileLayout     = TileLayout.GRID;
  *
  * @class
  */
 export class MapConfig {
 
-    /**
-     * ZXY URL template for the PBF vector tile provider.
-     * Use `{z}`, `{x}`, `{y}` as placeholders.
-     * @type {string}
-     */
-    #pbfTileProviderZXYurl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.pbf';
+    /** @type {string} */
+    #tileUrl = '';
+
+    /** @type {string} */
+    #accessToken = '';
+
+    /** @type {string|Function} */
+    #tileSchema = TileSchema.AUTO;
 
     /**
-     * OSM zoom level (typically 14–18). Higher values load more detail.
+     * Web-Mercator zoom level. Higher values load more detail.
      * @type {number}
      */
     #zoomLevel = 18;
 
     /**
-     * Number of tiles to load in each direction from the origin tile.
+     * Number of tiles to load in each direction from the center tile.
      * @type {number}
      */
     #renderDistance = 4;
@@ -95,13 +104,13 @@ export class MapConfig {
      * Geographic coordinates of the map origin.
      * @type {LatLon}
      */
-    #originLatLon = { lat: 41.899689, lon: 12.437790 };
+    #originLatLon = Object.freeze({ lat: 41.899689, lon: 12.437790 });
 
     /**
-     * Additional X/Z offset applied to the world origin in Three.js units.
+     * World position (X/Z) of the geographic origin, in Three.js units.
      * @type {WorldOffset}
      */
-    #worldOriginOffset = { x: 0, z: 0 };
+    #worldOriginOffset = Object.freeze({ x: 0, z: 0 });
 
     /**
      * @type {ViewMode}
@@ -146,12 +155,15 @@ export class MapConfig {
     get _dirtyFields() { return this.#dirtyFields; }
 
     /**
-     * True if any dirty field requires a full tile rebuild (new fetch + geometry generation).
+     * True if any dirty field requires reloading all tiles (new download + geometry generation).
      * @type {boolean}
      * @readonly
      */
     get requiresRebuild() {
-        return [...this.#dirtyFields].some(f => REBUILD_REQUIRED_FIELDS[f] === true);
+        for (const field of this.#dirtyFields) {
+            if (REBUILD_REQUIRED_FIELDS.has(field)) return true;
+        }
+        return false;
     }
 
     /**
@@ -172,11 +184,32 @@ export class MapConfig {
         this.#dirtyFields.clear();
     }
 
+    /**
+     * Sets several properties at once; unknown names throw.
+     * @param {Partial<Record<string, unknown>>} values
+     * @returns {MapConfig} This instance, for chaining.
+     *
+     * @example
+     * config.set({ tileUrl: 'https://tiles.openfreemap.org/planet', zoomLevel: 14, renderDistance: 5 });
+     */
+    set(values) {
+        for (const [name, value] of Object.entries(values ?? {})) {
+            if (!SETTABLE.has(name)) throw new Error(`ThreeGeoPlay: Unknown MapConfig option "${name}"`);
+            this[name] = value;
+        }
+        return this;
+    }
+
     // ─── Properties ──────────────────────────────────────────────────────────
 
     /**
-     * ZXY URL template for the PBF tile provider.
-     * Changing this triggers a full tile rebuild.
+     * Where the vector tiles come from. Required before {@link ThreeGeoPlay#start};
+     * changing it reloads all tiles. Accepts:
+     *  - a tile URL template with `{x}`, `{y}` and usually `{z}` (omit `{z}` only
+     *    for single-zoom tile sets, whose zoom must then match {@link zoomLevel});
+     *  - a TileJSON URL (MapTiler, OpenFreeMap, tileservers);
+     *  - a MapLibre / Mapbox style URL: its first vector source is used;
+     *  - a `mapbox://` URL, with {@link accessToken}.
      * @type {string}
      */
     get pbfTileProviderZXYurl() { return this.#pbfTileProviderZXYurl; }
