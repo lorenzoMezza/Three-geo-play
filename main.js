@@ -22,29 +22,29 @@ const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerH
 camera.position.set(0, 90, 140)
 
 const controls = new OrbitControls(camera, renderer.domElement)
-controls.enableDamping = true
-controls.dampingFactor = 0.05
-controls.screenSpacePanning = false
-controls.minDistance = 0.001
-controls.maxDistance = 500000
-controls.maxPolarAngle = Math.PI / 2
+controls.enableDamping      = true
+controls.dampingFactor      = 0.08
+controls.screenSpacePanning = false   // pan along the ground
+controls.minDistance        = 2
+controls.maxDistance        = 20000
+controls.maxPolarAngle      = Math.PI / 2 - 0.05
 
-const stats = new Stats()
-stats.showPanel(0)
-document.body.appendChild(stats.dom)
+// Lights only affect lit materials ("Lit material" option for buildings);
+// the default map materials are unlit.
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445066, 1.6))
+const sun = new THREE.DirectionalLight(0xffffff, 2.2)
+sun.position.set(-150, 300, 120)
+scene.add(sun)
 
-const gp  = new ThreeGeoPlay(scene, camera, renderer)
-const cfg = gp.getMapConfig()
+// ─── Map ────────────────────────────────────────────────────────────────────
+const sourceOptions = ({ tileUrl, zoomLevel, tileWorldSize, renderDistance }) => ({ tileUrl, zoomLevel, tileWorldSize, renderDistance })
 
-cfg.renderDistance        = 6
-cfg.tileWorldSize         = 50
-cfg.zoomLevel             = 16
-cfg.worldOriginOffset     = { x: 0, z: 0 }
-cfg.tileLayout            = TileLayout.CIRCULAR
-cfg.viewMode              = ViewMode.FOLLOW_TARGET
-cfg.originLatLon          = { lat:41.9029, lon: 12.4534 }
-cfg.showTileBorders       = false
-cfg.pbfTileProviderZXYurl = './tiles/Y{y}X{x}.pbf'
+const geo = new ThreeGeoPlay(scene, camera, renderer, {
+    ...sourceOptions(SOURCES.local),
+    tileLayout:   TileLayout.CIRCULAR,
+    originLatLon: { lat: PLACES[0].lat, lon: PLACES[0].lon },
+})
+const config = geo.getMapConfig()
 
 gp.start()
 
