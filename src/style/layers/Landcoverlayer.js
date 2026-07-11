@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { BaseFeatureType } from '../core/Basefeaturetype';
-import { BaseLayer } from '../core/Baselayer';
+import { BaseFeatureType } from '../core/Basefeaturetype.js';
+import { BaseLayer } from '../core/Baselayer.js';
 
 /**
  * @private
@@ -15,7 +15,7 @@ class LandCoverType extends BaseFeatureType {
      */
     constructor(color, Y) {
         super(
-            new THREE.MeshBasicMaterial({ color, side: THREE.BackSide }),
+            new THREE.MeshBasicMaterial({ color }),
             Y,
             -3  // renderingOrder
         );

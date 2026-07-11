@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BaseFeatureType } from '../core/Basefeaturetype';
+import { BaseFeatureType } from '../core/Basefeaturetype.js';
 
 /**
  * The background (base-fill) layer rendered beneath all other layers.
@@ -16,7 +16,7 @@ export class BackgroundLayer extends BaseFeatureType {
 
     /**
      * Creates a BackgroundLayer with default sand-beige material,
-     * Y -0.1, and renderingOrder -5.
+     * Y -0.01, and renderingOrder -1000.
      */
     constructor() {
         super(
