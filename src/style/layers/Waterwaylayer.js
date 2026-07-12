@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { LineFeatureType } from '../core/Linefeaturetype';
-import { BaseLayer } from '../core/Baselayer';
+import { LineFeatureType } from '../core/Linefeaturetype.js';
+import { BaseLayer } from '../core/Baselayer.js';
 
 /**
  * @typedef {'river'|'stream'|'tidal_channel'|'flowline'|
@@ -38,9 +38,9 @@ export class WaterwayLayer extends BaseLayer {
         const delta = 0.2;
 
         // Blu-acciaio saturo, leggermente più scuro del WaterLayer poligonale
-        const waterMat   = new THREE.MeshBasicMaterial({ color: 0x3A8AB8, side: THREE.BackSide });
+        const waterMat   = new THREE.MeshBasicMaterial({ color: 0x3A8AB8 });
         // Outline blu notte profondo — definisce nettamente i bordi del corso d'acqua
-        const outlineMat = new THREE.MeshBasicMaterial({ color: 0x1A3F60, side: THREE.BackSide });
+        const outlineMat = new THREE.MeshBasicMaterial({ color: 0x1A3F60 });
 
         this.#river         = new LineFeatureType(waterMat, outlineMat, 0, 0.50 * delta, 0.04,true, -2);
         this.#stream        = new LineFeatureType(waterMat, outlineMat, 0, 0.30 * delta,  0.04,true, -2);
@@ -74,11 +74,12 @@ export class WaterwayLayer extends BaseLayer {
 
     /**
      * Replaces fill and (optionally) outline material on every waterway type.
-     * @param {THREE.Material} material
+     * Pass `null` as `material` to change only the outlines.
+     * @param {THREE.Material|null} material
      * @param {THREE.Material} [outlineMaterial]
      */
     setAllMaterials(material, outlineMaterial) {
-        super.setAllMaterials(material);
+        if (material !== null && material !== undefined) super.setAllMaterials(material);
         if (outlineMaterial) {
             if (!(outlineMaterial instanceof THREE.Material)) {
                 console.warn('ThreeGeoPlay: Invalid outlineMaterial, must be THREE.Material');
@@ -95,7 +96,7 @@ export class WaterwayLayer extends BaseLayer {
     setOutlineWidthAll(width) { this._allTypes().forEach(t => { t.outlineWidth = width; }); }
 
     /**
-     * Resets the per-type outline width on all waterway types.
+     * Restores the default outline width on all waterway types.
      */
     resetOutlineWidthAll() { this._allTypes().forEach(t => t.resetOutlineWidth()); }
 
@@ -104,6 +105,12 @@ export class WaterwayLayer extends BaseLayer {
      * @param {number} width
      */
     setLineWidthAll(width) { this._allTypes().forEach(t => { t.lineWidth = width; }); }
+
+    /**
+     * Sets `jointSegments` (roundness of caps and joints) on every waterway type.
+     * @param {number} segments
+     */
+    setJointSegmentsAll(segments) { this._allTypes().forEach(t => { t.jointSegments = segments; }); }
 
   /**
      * Sets `renderingOrder` on every WaterWay type.

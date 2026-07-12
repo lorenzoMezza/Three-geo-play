@@ -1,15 +1,15 @@
 import * as THREE from 'three';
-import { LineFeatureType } from '../core/Linefeaturetype';
-import { BaseLayer } from '../core/Baselayer';
+import { LineFeatureType } from '../core/Linefeaturetype.js';
+import { BaseLayer } from '../core/Baselayer.js';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function makeRoadMaterial(color) {
-    return new THREE.MeshBasicMaterial({ color, side: THREE.BackSide, wireframe: false });
+    return new THREE.MeshBasicMaterial({ color });
 }
 
 function makeOutlineMaterial(color) {
-    return new THREE.MeshBasicMaterial({ color, side: THREE.BackSide });
+    return new THREE.MeshBasicMaterial({ color });
 }
 
 // ── TransportationLayer ───────────────────────────────────────────────────────
@@ -85,7 +85,7 @@ export class TransportationLayer extends BaseLayer {
         const buswayMat  = makeRoadMaterial(0x6080A0);
 
         this.#motorway               = new LineFeatureType(roadMat,    outlineMat, 0, 0.55 * delta, 0.03, true,  -1);
-        this.#trunk                  = new LineFeatureType(roadMat,    outlineMat, 0, 0.50 * delta, 0.03, false, -1);
+        this.#trunk                  = new LineFeatureType(roadMat,    outlineMat, 0, 0.50 * delta, 0.03, true,  -1);
         this.#trunk_construction     = new LineFeatureType(constrMat,  outlineMat, 0, 0.48 * delta, 0.03, false, -1);
         this.#primary                = new LineFeatureType(roadMat,    outlineMat, 0, 0.45 * delta, 0.03, true,  -1);
         this.#primary_construction   = new LineFeatureType(constrMat,  outlineMat, 0, 0.43 * delta, 0.03, false, -1);
@@ -107,7 +107,7 @@ export class TransportationLayer extends BaseLayer {
         this.#bus_guideway           = new LineFeatureType(buswayMat,  outlineMat, 0, 0.17 * delta, 0.03, false, -1);
         this.#rail                   = new LineFeatureType(roadMat,    outlineMat, 0, 0.18 * delta, 0.03, false, -1);
         this.#transit                = new LineFeatureType(roadMat,    outlineMat, 0, 0.20 * delta, 0.03, false, -1);
-        this.#pedestrian             = new LineFeatureType(roadMat,    outlineMat, 0, 0.12 * delta, 0.03, false, -1);
+        this.#pedestrian             = new LineFeatureType(roadMat,    outlineMat, 0, 0.12 * delta, 0.03, true,  -1);
         this.#pier                   = new LineFeatureType(roadMat,    outlineMat, 0, 0.20 * delta, 0.03, false, -1);
         this.#ferry                  = new LineFeatureType(roadMat,    outlineMat, 0, 0.25 * delta, 0.03, false, -1);
 
@@ -172,11 +172,12 @@ export class TransportationLayer extends BaseLayer {
 
     /**
      * Replaces fill and (optionally) outline material on every road type.
-     * @param {THREE.Material}  material
+     * Pass `null` as `material` to change only the outlines.
+     * @param {THREE.Material|null}  material
      * @param {THREE.Material} [outlineMaterial]
      */
     setAllMaterials(material, outlineMaterial) {
-        super.setAllMaterials(material);
+        if (material !== null && material !== undefined) super.setAllMaterials(material);
         if (outlineMaterial) {
             if (!(outlineMaterial instanceof THREE.Material)) {
                 console.warn('ThreeGeoPlay: Invalid outlineMaterial, must be THREE.Material');
@@ -195,8 +196,15 @@ export class TransportationLayer extends BaseLayer {
     }
 
     /**
-     * Resets the per-type outline width on all road types (falls back to
-     * `generalConfig`).
+     * Sets `jointSegments` (roundness of caps and joints) on every road type.
+     * @param {number} segments
+     */
+    setJointSegmentsAll(segments) {
+        this._allTypes().forEach(t => { t.jointSegments = segments; });
+    }
+
+    /**
+     * Restores the default outline width on all road types.
      */
     resetOutlineWidthAll() {
         this._allTypes().forEach(t => t.resetOutlineWidth());
@@ -211,7 +219,7 @@ export class TransportationLayer extends BaseLayer {
     }
 
     /**
-     * Sets master layer visibility and propagates to all road types.
+     * Sets the master layer visibility (alias for the `isVisible` setter).
      * @param {boolean} isVisible
      */
     setVisible(isVisible) {
