@@ -1,6 +1,11 @@
-import { MapStyle }  from "./style/MapStyle";
-import { MapConfig, ViewMode } from "./config/MapConfig";
-import { TileManager } from "./map/TileManager";
+import * as THREE from 'three';
+
+import { MapStyle }                   from './style/MapStyle.js';
+import { MapConfig, ViewMode }        from './config/MapConfig.js';
+import { TileManager }                from './map/TileManager.js';
+import { geoToTileXYFloat, tileXYToGeo } from './geo_utils/projection.js';
+
+const now = typeof performance !== 'undefined' ? () => performance.now() : () => Date.now();
 
 /**
  * Main entry point for ThreeGeoPlay — a geographic map renderer built on Three.js.
@@ -10,8 +15,16 @@ import { TileManager } from "./map/TileManager";
  * {@link ThreeGeoPlay#onFrameUpdate} inside your animation loop to keep the map
  * in sync with the camera / follow-target.
  *
+ * All map meshes live under a single `THREE.Group` (see {@link ThreeGeoPlay#getMapGroup}).
+ * World coordinates used by the API are expressed in that group's space, which
+ * is the scene's world space as long as the group is not transformed.
+ *
  * @example
- * const geoPlay = new ThreeGeoPlay(scene, camera, renderer);
+ * const geoPlay = new ThreeGeoPlay(scene, camera, renderer, {
+ *     tileUrl:      'https://tiles.openfreemap.org/planet',   // TileJSON, style, template or mapbox://
+ *     originLatLon: { lat: 41.8902, lon: 12.4922 },
+ *     zoomLevel:    14,
+ * });
  * geoPlay.start();
  *
  * function animate() {
@@ -21,21 +34,27 @@ import { TileManager } from "./map/TileManager";
  * }
  * animate();
  *
+ * Events (`geoPlay.addEventListener(type, listener)`):
+ *  - `sourceload`  — `{ source }`: the tile source is resolved (see {@link getTileSource});
+ *  - `sourceerror` — `{ error, willRetry }`: the tile source could not be loaded
+ *    (e.g. wrong access token); `willRetry` is false for configuration errors.
+ *
  * @class
+ * @extends THREE.EventDispatcher
  */
-export class ThreeGeoPlay {
+export class ThreeGeoPlay extends THREE.EventDispatcher {
 
     /** @type {boolean} */
     #isStarted = false;
 
+    /** @type {boolean} */
+    #isDestroyed = false;
+
     /** @type {number} */
-    #lastTime = Date.now();
+    #lastFollowUpdate = -Infinity;
 
     /** @type {MapConfig} */
     #mapConfig = null;
-
-    /** @type {MapStyle} */
-    #mapStyle = null;
 
     /** @type {THREE.Scene} */
     #scene = null;
@@ -53,22 +72,44 @@ export class ThreeGeoPlay {
      */
     #followTarget = null;
 
+    /** @type {TileManager|null} */
+    #tileManager = null;
+
+    /** @type {THREE.Group} */
+    #mapGroup = null;
+
+    /** Center requested in MANUAL mode before the map was started (`null` = origin). */
+    #manualCenter = null;
+
+    /** @type {MapStyle|null} */
+    #lastStyle = null;
+
+    /** @type {number} */
+    #lastStyleStamp = -1;
+
+    #tmpVec = new THREE.Vector3();
+
     /**
      * @param {THREE.Scene}         threeScene    - Three.js scene.
      * @param {THREE.Camera}        threeCamera   - Three.js camera (also the default follow target).
      * @param {THREE.WebGLRenderer} threeRenderer - Three.js renderer.
-     * @throws {Error} If any parameter is missing.
+     * @param {Object} [options] - Initial {@link MapConfig} values (see {@link MapConfig#set}).
+     * @throws {Error} If a parameter is missing or an option is invalid.
      */
-    constructor(threeScene, threeCamera, threeRenderer) {
+    constructor(threeScene, threeCamera, threeRenderer, options) {
+        super();
         this.#validateConstructorParams(threeScene, threeCamera, threeRenderer);
 
         this.#scene         = threeScene;
         this.#camera        = threeCamera;
         this.#followTarget  = threeCamera;
         this.#renderer      = threeRenderer;
-        threeRenderer.localClippingEnabled = true;
         this.#mapConfig     = new MapConfig();
-        this.#mapStyle      = new MapStyle();
+
+        this.#mapGroup      = new THREE.Group();
+        this.#mapGroup.name = 'ThreeGeoPlay';
+
+        if (options) this.#mapConfig.set(options);
     }
 
     // ─── Private helpers ─────────────────────────────────────────────────────
@@ -87,22 +128,20 @@ export class ThreeGeoPlay {
     }
 
     /**
-     * @param {MapConfig} config
-     * @returns {boolean}
+     * @param {number} lat
+     * @param {number} lon
+     * @throws {Error}
      * @private
      */
-    #validateConfig(config) {
-        if (!config) return false;
-        if (!(config instanceof MapConfig)) {
-            console.warn("ThreeGeoPlay: MapConfig must be an instance of MapConfig");
-            return false;
-        }
-        return true;
+    #validateLatLon(lat, lon) {
+        if (typeof lat !== 'number' || isNaN(lat)) throw new Error(`ThreeGeoPlay: Invalid latitude: ${lat}. Must be a number`);
+        if (lat < -90 || lat > 90)                 throw new Error(`ThreeGeoPlay: Invalid latitude: ${lat}. Must be between -90 and 90`);
+        if (typeof lon !== 'number' || isNaN(lon)) throw new Error(`ThreeGeoPlay: Invalid longitude: ${lon}. Must be a number`);
+        if (lon < -180 || lon > 180)               throw new Error(`ThreeGeoPlay: Invalid longitude: ${lon}. Must be between -180 and 180`);
     }
 
     /**
-     * @param {MapStyle} style
-     * @returns {boolean}
+     * Switches to MANUAL mode (with a warning) if the map is following a target.
      * @private
      */
     #validateStyle(style) {
