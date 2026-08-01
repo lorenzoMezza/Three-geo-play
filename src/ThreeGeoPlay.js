@@ -144,23 +144,45 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
      * Switches to MANUAL mode (with a warning) if the map is following a target.
      * @private
      */
-    #validateStyle(style) {
-        if (!style) return false;
-        if (!(style instanceof MapStyle)) {
-            console.warn("ThreeGeoPlay: MapStyle must be an instance of MapStyle");
-            return false;
+    #ensureManualMode() {
+        if (this.#mapConfig.viewMode === ViewMode.FOLLOW_TARGET) {
+            console.warn("ThreeGeoPlay: ViewMode was set to FOLLOW_TARGET. Automatically switching to MANUAL mode.");
+            this.#mapConfig.viewMode = ViewMode.MANUAL;
         }
-        return true;
+    }
+
+    /**
+     * World X/Z position of the follow target.
+     * @returns {{ x: number, z: number }}
+     * @private
+     */
+    #followTargetPosition() {
+        const p = this.#followTarget.getWorldPosition(this.#tmpVec);
+        return { x: p.x, z: p.z };
+    }
+
+    /**
+     * Creates a tile manager for the current config and loads the first tiles.
+     * @private
+     */
+    #createTileManager(center) {
+        this.#tileManager = new TileManager(this.#mapConfig, this.#mapGroup, (type, detail) => this.dispatchEvent({ type, ...detail }));
+        this.#tileManager.setCenterPosition(center);
+        this.#mapConfig.flushDirtyState();
+        this.#lastStyle      = this.#mapConfig.mapStyle;
+        this.#lastStyleStamp = this.#lastStyle._stamp;
+        this.#tileManager.update();
     }
 
     // ─── Public API ──────────────────────────────────────────────────────────
 
     /**
      * Sets the object the map will follow in {@link ViewMode.FOLLOW_TARGET} mode.
+     * The target's world position is used, so nested objects work too.
      * If the current `viewMode` is not `FOLLOW_TARGET` it is switched automatically.
      *
      * @param {THREE.Object3D} target - Any Three.js Object3D (mesh, group, camera, …).
-     * @throws {Error} If `target` is not a valid Three.js Object3D with a position.
+     * @throws {Error} If `target` is not a valid Three.js Object3D.
      *
      * @example
      * const playerMesh = new THREE.Mesh(geometry, material);
@@ -173,9 +195,6 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
         if (!target.isObject3D) {
             throw new Error("ThreeGeoPlay: Follow target must be a Three.js Object3D (e.g., Camera, Mesh, Group)");
         }
-        if (!target.position || typeof target.position.x !== 'number' || typeof target.position.z !== 'number') {
-            throw new Error("ThreeGeoPlay: Follow target must have a valid position property with x and z coordinates");
-        }
 
         this.#followTarget = target;
 
@@ -183,74 +202,125 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
             console.warn("ThreeGeoPlay: ViewMode was not set to FOLLOW_TARGET. Automatically switching to FOLLOW_TARGET mode.");
             this.#mapConfig.viewMode = ViewMode.FOLLOW_TARGET;
         }
+        this.#lastFollowUpdate = -Infinity;
     }
 
     /**
-     * Moves the map origin to the given geographic coordinates.
-     * Only effective in {@link ViewMode.MANUAL} or `STATIC` mode — ignored (with a warning)
-     * in {@link ViewMode.FOLLOW_TARGET}.
+     * Places the given geographic coordinates at the world origin
+     * ({@link MapConfig#worldOriginOffset}) and centers the loaded area there.
+     * If the current mode is {@link ViewMode.FOLLOW_TARGET} it is automatically
+     * switched to {@link ViewMode.MANUAL}.
      *
      * @param {number} lat - Latitude in degrees (−90 … 90).
      * @param {number} lon - Longitude in degrees (−180 … 180).
      * @throws {Error} If either coordinate is out of range or not a number.
      *
      * @example
-     * geoPlay.getMapConfig().viewMode = ViewMode.MANUAL;
      * geoPlay.moveMapOriginToLatLon(48.8566, 2.3522); // Paris
      */
     moveMapOriginToLatLon(lat, lon) {
-        if (this.#mapConfig.viewMode === ViewMode.FOLLOW_TARGET) {
-            console.warn("ThreeGeoPlay: ViewMode was set to FOLLOW_TARGET. Automatically switching to MANUAL mode.");
-            return;
-        }
-
-        if (typeof lat !== 'number' || isNaN(lat)) throw new Error(`Invalid latitude: ${lat}. Must be a number`);
-        if (lat < -90 || lat > 90)                 throw new Error(`Invalid latitude: ${lat}. Must be between -90 and 90`);
-        if (typeof lon !== 'number' || isNaN(lon)) throw new Error(`Invalid longitude: ${lon}. Must be a number`);
-        if (lon < -180 || lon > 180)               throw new Error(`Invalid longitude: ${lon}. Must be between -180 and 180`);
+        this.#validateLatLon(lat, lon);
+        this.#ensureManualMode();
 
         this.#mapConfig.originLatLon = { lat, lon };
+        this.#manualCenter = null;
+        this.#tileManager?.setCenterPosition(null);
     }
 
     /**
-     * Moves the map origin to match the given Three.js world-space X/Z position.
-     * If the current mode is {@link ViewMode.FOLLOW_TARGET} it is automatically
-     * switched to {@link ViewMode.MANUAL}.
+     * Centers the loaded area on the given world-space X/Z position, without
+     * changing the geographic origin (world coordinates stay stable).
+     * This is the manual counterpart of {@link ViewMode.FOLLOW_TARGET}: if the
+     * current mode is `FOLLOW_TARGET` it is automatically switched to
+     * {@link ViewMode.MANUAL}.
      *
      * @param {number} x - X coordinate in Three.js world space.
      * @param {number} z - Z coordinate in Three.js world space.
      * @throws {Error} If either coordinate is not a valid number.
      */
     moveMapOriginToPosition(x, z) {
-        if (this.#mapConfig.viewMode === ViewMode.FOLLOW_TARGET) {
-            console.warn("ThreeGeoPlay: ViewMode was set to FOLLOW_TARGET. Automatically switching to MANUAL mode.");
-            this.#mapConfig.viewMode = ViewMode.MANUAL;
-        }
+        if (typeof x !== 'number' || !Number.isFinite(x)) throw new Error(`ThreeGeoPlay: Invalid x coordinate: ${x}. Must be a number`);
+        if (typeof z !== 'number' || !Number.isFinite(z)) throw new Error(`ThreeGeoPlay: Invalid z coordinate: ${z}. Must be a number`);
+        this.#ensureManualMode();
 
-        if (typeof x !== 'number' || isNaN(x)) throw new Error(`Invalid x coordinate: ${x}. Must be a number`);
-        if (typeof z !== 'number' || isNaN(z)) throw new Error(`Invalid z coordinate: ${z}. Must be a number`);
+        this.#manualCenter = { x, z };
+        this.#tileManager?.setCenterPosition(this.#manualCenter);
     }
 
     /**
-     * Initialises the map, loads the first set of tiles and adds geometry to the scene.
+     * Converts geographic coordinates to world-space X/Z using the current
+     * {@link MapConfig} (origin, zoom level, tile size and offset).
+     *
+     * @param {number} lat - Latitude in degrees.
+     * @param {number} lon - Longitude in degrees.
+     * @returns {{ x: number, z: number }}
+     *
+     * @example
+     * const { x, z } = geoPlay.latLonToWorld(41.8902, 12.4922); // Colosseum
+     * marker.position.set(x, 0, z);
+     */
+    latLonToWorld(lat, lon) {
+        this.#validateLatLon(lat, lon);
+        const { originLatLon, zoomLevel, tileWorldSize, worldOriginOffset } = this.#mapConfig;
+        const [ox, oy] = geoToTileXYFloat(originLatLon.lon, originLatLon.lat, zoomLevel);
+        const [tx, ty] = geoToTileXYFloat(lon, lat, zoomLevel);
+        return {
+            x: (tx - ox) * tileWorldSize + worldOriginOffset.x,
+            z: (ty - oy) * tileWorldSize + worldOriginOffset.z,
+        };
+    }
+
+    /**
+     * Converts a world-space X/Z position to geographic coordinates using the
+     * current {@link MapConfig}.
+     *
+     * @param {number} x
+     * @param {number} z
+     * @returns {{ lat: number, lon: number }}
+     */
+    worldToLatLon(x, z) {
+        const { originLatLon, zoomLevel, tileWorldSize, worldOriginOffset } = this.#mapConfig;
+        const [ox, oy] = geoToTileXYFloat(originLatLon.lon, originLatLon.lat, zoomLevel);
+        const [lon, lat] = tileXYToGeo(
+            ox + (x - worldOriginOffset.x) / tileWorldSize,
+            oy + (z - worldOriginOffset.z) / tileWorldSize,
+            zoomLevel,
+        );
+        return { lat, lon: ((lon + 180) % 360 + 360) % 360 - 180 };
+    }
+
+    /**
+     * Initialises the map, adds it to the scene and starts loading tiles.
      * Call this once, after configuring {@link MapConfig} and {@link MapStyle}.
      *
-     * @throws {Error} If called more than once.
+     * @throws {Error} If `tileUrl` has not been set.
      */
     start() {
+        if (this.#isDestroyed) {
+            console.warn("ThreeGeoPlay: Cannot start a destroyed instance");
+            return;
+        }
         if (this.#isStarted) {
             console.warn("ThreeGeoPlay: Already started");
             return;
         }
-        this.tileManager = new TileManager(this.#mapConfig, this.#scene);
-        this.tileManager.init();
+        if (!this.#mapConfig.tileUrl) {
+            throw new Error("ThreeGeoPlay: MapConfig.tileUrl must be set before start()");
+        }
+
+        this.#scene.add(this.#mapGroup);
+        const center = this.#mapConfig.viewMode === ViewMode.FOLLOW_TARGET
+            ? this.#followTargetPosition()
+            : this.#manualCenter;
+        this.#createTileManager(center);
+        this.#lastFollowUpdate = now();
         this.#isStarted = true;
     }
 
     /**
-     * Processes per-frame updates: applies dirty config changes, updates tile
-     * borders, and (in {@link ViewMode.FOLLOW_TARGET} mode) repositions the map
-     * origin to track the follow target.
+     * Processes per-frame updates: applies config and style changes, and
+     * (in {@link ViewMode.FOLLOW_TARGET} mode) moves the loaded area to track
+     * the follow target. Does nothing before {@link start} or after {@link destroy}.
      *
      * **Must be called every frame inside your Three.js animation loop.**
      *
