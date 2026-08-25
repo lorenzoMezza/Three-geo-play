@@ -332,39 +332,33 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
      * }
      */
     onFrameUpdate() {
-        this.tileManager?.updateBorders();
+        if (!this.#isStarted || this.#isDestroyed) return;
 
-        if (this.#mapConfig._isDirty) {
-            const dirty = this.#mapConfig._dirtyFields;
+        const config      = this.#mapConfig;
+        const tileManager = this.#tileManager;
 
-            if (dirty.has('tileWorldSize'))  this.tileManager?.rescaleTiles(this.#mapConfig.tileWorldSize);
-            if (dirty.has('renderDistance')) this.tileManager?.applyCenter();
-            if (dirty.has('mapStyle'))       this.tileManager?.updateMaterials();
-
-            const needsRebuild = ['zoomLevel', 'pbfTileProviderZXYurl', 'tileLayout',
-                                  'worldOriginOffset', 'originLatLon']
-                .some(f => dirty.has(f));
-
-            if (needsRebuild) {
-                this.tileManager?.destroy();
-                this.tileManager = new TileManager(this.#mapConfig, this.#scene);
-                this.tileManager.init();
-            }
-
-            this.#mapConfig.flushDirtyState();
+        if (config._isDirty) {
+            tileManager.configChanged(config._dirtyFields);
+            config.flushDirtyState();
         }
 
-        if (this.#mapConfig.viewMode === ViewMode.FOLLOW_TARGET) {
-            const t        = Date.now();
-            const interval = this.#mapConfig.FollowUpdateInterval;
-            if (interval === 0 || t - this.#lastTime >= interval) {
-                this.#lastTime = t;
-                this.tileManager.updateCenterFromPosition(
-                    this.#followTarget.position.x,
-                    this.#followTarget.position.z
-                );
+        const style = config.mapStyle;
+        const stamp = style._stamp;
+        if (style !== this.#lastStyle || stamp !== this.#lastStyleStamp) {
+            this.#lastStyle      = style;
+            this.#lastStyleStamp = stamp;
+            tileManager.restyle();
+        }
+
+        if (config.viewMode === ViewMode.FOLLOW_TARGET) {
+            const t = now();
+            if (t - this.#lastFollowUpdate >= config.followUpdateInterval) {
+                this.#lastFollowUpdate = t;
+                tileManager.setCenterPosition(this.#followTargetPosition());
             }
         }
+
+        tileManager.update();
     }
 
     /**
@@ -377,38 +371,89 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
     }
 
     /**
-     * Replaces the entire map configuration.
-     * The new config is applied on the next {@link onFrameUpdate} call.
+     * Replaces the entire map configuration. If the map is running, all tiles
+     * are reloaded with the new configuration immediately.
      *
      * @param {MapConfig} mapConfig - A fully constructed {@link MapConfig} instance.
      * @throws {Error} If `mapConfig` is not a valid {@link MapConfig} instance.
      */
     setMapConfig(mapConfig) {
-        if (!this.#validateConfig(mapConfig)) {
-            throw new Error("ThreeGeoPlay: Invalid MapConfig provided");
+        if (!(mapConfig instanceof MapConfig)) {
+            throw new Error("ThreeGeoPlay: Invalid MapConfig provided — must be an instance of MapConfig");
         }
+        if (mapConfig === this.#mapConfig) return;
         this.#mapConfig = mapConfig;
+
+        if (this.#isStarted && !this.#isDestroyed) {
+            if (!mapConfig.tileUrl) {
+                throw new Error("ThreeGeoPlay: MapConfig.tileUrl must be set");
+            }
+            const center = mapConfig.viewMode === ViewMode.FOLLOW_TARGET
+                ? this.#followTargetPosition()
+                : this.#tileManager.centerPosition;
+            this.#tileManager.destroy();
+            this.#createTileManager(center);
+        }
     }
 
     /**
-     * Returns the active {@link MapStyle} instance.
+     * Returns the active {@link MapStyle} (the one of the current {@link MapConfig}).
      * @returns {MapStyle}
      */
     getMapStyle() {
-        return this.#mapStyle;
+        return this.#mapConfig.mapStyle;
     }
 
     /**
-     * Replaces the active map style.
+     * Replaces the active map style. Loaded tiles are restyled on the next
+     * {@link onFrameUpdate}.
      *
      * @param {MapStyle} mapStyle - A fully constructed {@link MapStyle} instance.
      * @throws {Error} If `mapStyle` is not a valid {@link MapStyle} instance.
      */
     setMapStyle(mapStyle) {
-        if (!this.#validateStyle(mapStyle)) {
-            throw new Error("ThreeGeoPlay: Invalid MapStyle provided");
+        if (!(mapStyle instanceof MapStyle)) {
+            throw new Error("ThreeGeoPlay: Invalid MapStyle provided — must be an instance of MapStyle");
         }
-        this.#mapStyle = mapStyle;
+        this.#mapConfig.mapStyle = mapStyle;
+    }
+
+    /**
+     * Loading progress of the tiles in the current render area: `ready` tiles are
+     * on screen, `empty` ones have no data, `loading` ones are queued, downloading
+     * or being built, `failed` ones gave up after retries. All zero before {@link start}.
+     *
+     * @returns {{ total: number, ready: number, empty: number, loading: number, failed: number }}
+     *
+     * @example
+     * const { total, loading } = geoPlay.getTileStats();
+     * progress.textContent = loading ? `Loading ${total - loading}/${total}` : '';
+     */
+    getTileStats() {
+        return this.#tileManager?.stats ?? { total: 0, ready: 0, empty: 0, loading: 0, failed: 0 };
+    }
+
+    /**
+     * The resolved tile source: URL templates, zoom range, vector layers and the
+     * attribution the provider requires you to display (e.g. Mapbox, MapTiler, OSM).
+     * `null` before {@link start} and while a TileJSON / style URL is loading.
+     *
+     * @returns {{ tiles: string[], minZoom: number, maxZoom: number, attribution: string, layers: string[] } | null}
+     *
+     * @example
+     * credits.innerHTML = geoPlay.getTileSource()?.attribution ?? '';
+     */
+    getTileSource() {
+        return this.#tileManager?.source ?? null;
+    }
+
+    /**
+     * Returns the group containing every map mesh (added to the scene by {@link start}).
+     * Useful for raycasting against the map or toggling its visibility.
+     * @returns {THREE.Group}
+     */
+    getMapGroup() {
+        return this.#mapGroup;
     }
 
     /**
@@ -436,15 +481,25 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
     }
 
     /**
-     * Destroys the ThreeGeoPlay instance and releases all held references.
+     * Stops all downloads, removes the map from the scene, frees its GPU
+     * geometry and releases all held references.
+     * Materials belong to the {@link MapStyle} and are not disposed.
      * After calling this method the instance must not be used again.
      */
     destroy() {
-        this.#scene     = null;
-        this.#camera    = null;
-        this.#renderer  = null;
-        this.#mapConfig = null;
-        this.#mapStyle  = null;
-        this.#lastTime  = null;
+        if (this.#isDestroyed) return;
+        this.#isDestroyed = true;
+
+        this.#tileManager?.destroy();
+        this.#tileManager = null;
+        this.#mapGroup?.removeFromParent();
+
+        this.#scene        = null;
+        this.#camera       = null;
+        this.#renderer     = null;
+        this.#followTarget = null;
+        this.#mapConfig    = null;
+        this.#mapGroup     = null;
+        this.#lastStyle    = null;
     }
 }
