@@ -9,6 +9,43 @@ export declare const TileLayout: {
 };
 export type TileLayout = typeof TileLayout[keyof typeof TileLayout];
 
+/**
+ * Vector tile schemas supported out of the box. `AUTO` (default) detects the
+ * schema from the layers of the source.
+ */
+export declare const TileSchema: {
+    readonly AUTO: 'auto';
+    /** OpenMapTiles — MapTiler, OpenFreeMap and most MapLibre sources. */
+    readonly OPENMAPTILES: 'openmaptiles';
+    /** Mapbox Streets v8. */
+    readonly MAPBOX: 'mapbox';
+};
+export type TileSchema = typeof TileSchema[keyof typeof TileSchema];
+
+/** Style layer / type a tile feature is drawn with (see {@link TileSchemaFunction}). */
+export interface SchemaMatch {
+    layer: 'transportation' | 'building' | 'water' | 'waterway' | 'landuse' | 'landcover';
+    /** Type name(s) looked up in the layer, most specific first. */
+    type: string | Array<string | undefined>;
+    /** Link road: drawn under the road it merges into. */
+    ramp?: boolean;
+}
+
+/** Custom tile schema: maps a feature of `sourceLayer` to a style layer / type, or `null` to skip it. */
+export type TileSchemaFunction = (sourceLayer: string, properties: Record<string, unknown>) => SchemaMatch | null;
+
+/** Resolved tile source (see `ThreeGeoPlay.getTileSource()`). */
+export interface TileSource {
+    /** Tile URL templates, used round-robin. */
+    tiles: string[];
+    minZoom: number;
+    maxZoom: number;
+    /** HTML attribution the provider requires you to display ('' if unknown). */
+    attribution: string;
+    /** Vector layer ids announced by the source ([] if unknown). */
+    layers: string[];
+}
+
 /** Camera / map tracking modes. */
 export declare const ViewMode: {
     readonly FOLLOW_TARGET: 'follow_target';
@@ -19,109 +56,133 @@ export type ViewMode = typeof ViewMode[keyof typeof ViewMode];
 // ─── Utility types ────────────────────────────────────────────────────────────
 
 export interface LatLon {
-    lat: number;
-    lon: number;
+    readonly lat: number;
+    readonly lon: number;
 }
 
 export interface WorldOffset {
+    readonly x: number;
+    readonly z: number;
+}
+
+export interface WorldPosition {
     x: number;
     z: number;
 }
 
-// ─── Layer sub-types ──────────────────────────────────────────────────────────
+/** Loading progress of the tiles in the current render area. */
+export interface TileStats {
+    /** Tiles in the render area. */
+    total: number;
+    /** Tiles on screen. */
+    ready: number;
+    /** Tiles without data (e.g. outside the provider coverage). */
+    empty: number;
+    /** Tiles queued, downloading or being built. */
+    loading: number;
+    /** Tiles that gave up after retries. */
+    failed: number;
+}
 
-/** A single land cover type (grass, wood, sand, …). */
-export declare class LandCoverType {
+// ─── Feature types ────────────────────────────────────────────────────────────
+
+/**
+ * Properties shared by every feature type (and by single-type layers).
+ * Every change is applied to the tiles already on screen on the next `onFrameUpdate()`.
+ */
+export declare class BaseFeatureType {
     /** Whether this type is rendered. */
     isVisible: boolean;
-    /** Three.js material used for this land cover. */
-    material: THREE.Material;
-    /** Y-axis render order offset. */
-    YOrder: number;
+    /** Fill material. Map geometry faces up (+Y): `THREE.FrontSide` materials work. */
+    material: THREE.Material | null;
+    /** Height (world units) at which this type is drawn. */
+    Y: number;
+    /**
+     * Three.js render order. Flat map geometry is drawn with `depthTest`
+     * disabled on its material and layered by this value (negative recommended).
+     * Line types use `[renderingOrder, renderingOrder + 1)`: tunnels < ground < bridges,
+     * outlines below fills, wider lines above narrower ones.
+     */
+    renderingOrder: number;
     setVisible(v: boolean): void;
 }
+
+/** A single land cover type (grass, wood, sand, …). */
+export declare class LandCoverType extends BaseFeatureType {}
 
 /** A single land use type (residential, industrial, hospital, …). */
-export declare class LandUseType {
-    isVisible: boolean;
-    material: THREE.Material;
-    YOrder: number;
-    setVisible(v: boolean): void;
-}
+export declare class LandUseType extends BaseFeatureType {}
 
 /** A single water body type (river, lake, ocean, …). */
-export declare class WaterType {
-    isVisible: boolean;
-    material: THREE.Material;
-    YOrder: number;
-    setVisible(v: boolean): void;
+export declare class WaterType extends BaseFeatureType {}
+
+/** A line feature type (roads, waterways). */
+export declare class LineFeatureType extends BaseFeatureType {
+    /** Material of the outline drawn around the line. */
+    outlineMaterial: THREE.Material | null;
+    /** Full line width, relative to one tile at zoom 18 (constant real-world width across zooms). Must be ≥ 0. */
+    lineWidth: number;
+    /** Extra width drawn with `outlineMaterial` (same units as `lineWidth`). `0` disables it; `null` restores the default. */
+    outlineWidth: number;
+    /** Points used to round caps and joints. Minimum 6. */
+    jointSegments: number;
+    /** Restores the outline width the type was created with. */
+    resetOutlineWidth(): void;
 }
 
 /** A single waterway type (river, canal, ditch, …). */
-export declare class WaterwayType {
-    isVisible: boolean;
-    material: THREE.Material;
-    outlineMaterial: THREE.Material;
-    YOrder: number;
-    /** Half-width of the rendered line in world units. Must be ≥ 0. */
-    lineWidth: number;
-    /**
-     * Per-type outline width. Set to `null` to inherit from the layer default.
-     */
-    outlineWidth: number | null;
-    setVisible(v: boolean): void;
-    /** Resets outlineWidth to null (falls back to layer default). */
-    resetOutlineWidth(): void;
-}
+export type WaterwayType = LineFeatureType;
 
 /** A single road / transport type (motorway, primary, rail, …). */
-export declare class RoadType {
-    isVisible: boolean;
-    material: THREE.Material;
-    outlineMaterial: THREE.Material;
-    YOrder: number;
-    /** Half-width of the road geometry in world units. Must be ≥ 0. */
-    lineWidth: number;
-    /** Per-type outline width. `null` falls back to GeneralConfig.outlineWidth. */
-    outlineWidth: number | null;
-    setVisible(v: boolean): void;
-    resetOutlineWidth(): void;
-}
+export type RoadType = LineFeatureType;
 
 // ─── Layers ───────────────────────────────────────────────────────────────────
 
-/** Background base-fill layer rendered beneath everything else. */
-export declare class BackgroundLayer {
+/** Shared behaviour of multi-type layers. */
+export declare class BaseLayer<TName extends string, TType extends BaseFeatureType> {
+    /**
+     * Master toggle: when `false` nothing of the layer is rendered; when `true`
+     * each type follows its own `isVisible` (per-type settings are preserved).
+     */
     isVisible: boolean;
-    material: THREE.Material;
-    /** Y-axis render order (very negative — renders under all other layers). */
-    YOrder: number;
+    getTypeByName(name: TName | (string & {})): TType | null;
+    setAllMaterials(material: THREE.Material): void;
+    /** Sets `isVisible` on every type of the layer. */
+    setVisibleAll(isVisible: boolean): void;
+}
+
+/** Background base-fill plane rendered beneath everything else. */
+export declare class BackgroundLayer extends BaseFeatureType {
     getTypeByName(name: string): this;
 }
 
-/** 3D building extrusion layer. */
-export declare class BuildingLayer {
-    isVisible: boolean;
-    /** Material applied to building faces. */
-    material: THREE.Material;
-    YOrder: number;
-    /** Base extrusion height multiplier for buildings without OSM height data. */
+/** 3D building extrusion layer (`renderingOrder` is not applied to buildings). */
+export declare class BuildingLayer extends BaseFeatureType {
+    /** Vertical exaggeration of the real OSM heights: `1` = true scale, `0` = flat. */
     height: number;
-    /** Enable finer roof / detail shapes when available in tile data. */
+    /** Reserved for future roof/detail rendering. Currently has no effect. */
     allowDetails: boolean;
     getTypeByName(name: string): this;
     setMaterial(material: THREE.Material): this;
-    setYOrder(y: number): this;
+    setY(y: number): this;
     setHeight(h: number): this;
     setAllowDetails(val: boolean): this;
 }
 
-export type LandCoverClassName = 'sand' | 'park' | 'grass' | 'wood' | 'wetland' | 'rock' | 'farmland';
+export type LandCoverClassName =
+    | 'sand' | 'park' | 'grass' | 'wood' | 'wetland' | 'rock' | 'farmland' | 'ice'
+    | 'allotments' | 'bare_rock' | 'beach' | 'bog' | 'dune' | 'scrub' | 'shrubbery'
+    | 'farm' | 'fell' | 'flowerbed' | 'forest' | 'garden' | 'glacier' | 'grassland'
+    | 'golf_course' | 'heath' | 'mangrove' | 'marsh' | 'meadow' | 'orchard'
+    | 'plant_nursery' | 'recreation_ground' | 'reedbed' | 'saltern' | 'saltmarsh'
+    | 'scree' | 'swamp' | 'tidalflat' | 'tundra' | 'village_green' | 'vineyard'
+    | 'wet_meadow';
 
-/** Manages land cover types (grass, wood, sand, …). */
-export declare class LandCoverLayer {
-    /** Master toggle — also propagates to all individual types. */
-    isVisible: boolean;
+/**
+ * Land cover types (grass, wood, sand, …). OpenMapTiles `subclass` values
+ * (e.g. `park`, `forest`, `beach`) take precedence over `class` values.
+ */
+export declare class LandCoverLayer extends BaseLayer<LandCoverClassName, LandCoverType> {
     readonly sand: LandCoverType;
     readonly park: LandCoverType;
     readonly grass: LandCoverType;
@@ -129,9 +190,40 @@ export declare class LandCoverLayer {
     readonly wetland: LandCoverType;
     readonly rock: LandCoverType;
     readonly farmland: LandCoverType;
-    getTypeByName(name: LandCoverClassName): LandCoverType | null;
-    setAllMaterials(material: THREE.Material): void;
-    setVisibleAll(isVisible: boolean): void;
+    readonly ice: LandCoverType;
+    readonly allotments: LandCoverType;
+    readonly bare_rock: LandCoverType;
+    readonly beach: LandCoverType;
+    readonly bog: LandCoverType;
+    readonly dune: LandCoverType;
+    readonly scrub: LandCoverType;
+    readonly shrubbery: LandCoverType;
+    readonly farm: LandCoverType;
+    readonly fell: LandCoverType;
+    readonly flowerbed: LandCoverType;
+    readonly forest: LandCoverType;
+    readonly garden: LandCoverType;
+    readonly glacier: LandCoverType;
+    readonly grassland: LandCoverType;
+    readonly golf_course: LandCoverType;
+    readonly heath: LandCoverType;
+    readonly mangrove: LandCoverType;
+    readonly marsh: LandCoverType;
+    readonly meadow: LandCoverType;
+    readonly orchard: LandCoverType;
+    readonly plant_nursery: LandCoverType;
+    readonly recreation_ground: LandCoverType;
+    readonly reedbed: LandCoverType;
+    readonly saltern: LandCoverType;
+    readonly saltmarsh: LandCoverType;
+    readonly scree: LandCoverType;
+    readonly swamp: LandCoverType;
+    readonly tidalflat: LandCoverType;
+    readonly tundra: LandCoverType;
+    readonly village_green: LandCoverType;
+    readonly vineyard: LandCoverType;
+    readonly wet_meadow: LandCoverType;
+    static readonly admittedClasses: Set<LandCoverClassName>;
 }
 
 export type LandUseClassName =
@@ -140,11 +232,11 @@ export type LandUseClassName =
     | 'school' | 'college' | 'bus_station' | 'kindergarten' | 'theme_park'
     | 'hospital' | 'railway' | 'parking' | 'recreation_ground' | 'cemetery'
     | 'library' | 'track' | 'stadium' | 'quarter' | 'zoo' | 'attraction'
-    | 'religious' | 'quarry' | 'nature_reserve' | 'protected_area';
+    | 'religious' | 'quarry' | 'nature_reserve' | 'protected_area'
+    | 'neighbourhood' | 'garages' | 'dam';
 
-/** Manages land use types (residential, industrial, parks, …). */
-export declare class LandUseLayer {
-    isVisible: boolean;
+/** Land use types (residential, industrial, hospital, …). */
+export declare class LandUseLayer extends BaseLayer<LandUseClassName, LandUseType> {
     readonly farmland: LandUseType;
     readonly suburb: LandUseType;
     readonly residential: LandUseType;
@@ -175,32 +267,29 @@ export declare class LandUseLayer {
     readonly quarry: LandUseType;
     readonly nature_reserve: LandUseType;
     readonly protected_area: LandUseType;
-    getTypeByName(name: LandUseClassName): LandUseType | null;
-    setAllMaterials(material: THREE.Material): void;
-    setVisibleAll(v: boolean): void;
+    readonly neighbourhood: LandUseType;
+    readonly garages: LandUseType;
+    readonly dam: LandUseType;
     static readonly admittedClasses: Set<LandUseClassName>;
 }
 
-export type WaterClassName = 'swimming_pool' | 'river' | 'lake' | 'ocean' | 'pond';
+export type WaterClassName = 'swimming_pool' | 'river' | 'lake' | 'ocean' | 'pond' | 'dock';
 
-/** Manages water body types (lakes, oceans, rivers as polygons). */
-export declare class WaterLayer {
-    isVisible: boolean;
+/** Water body types (lakes, oceans, rivers as polygons). */
+export declare class WaterLayer extends BaseLayer<WaterClassName, WaterType> {
     readonly swimming_pool: WaterType;
     readonly river: WaterType;
     readonly lake: WaterType;
     readonly ocean: WaterType;
     readonly pond: WaterType;
-    getTypeByName(name: WaterClassName): WaterType | null;
-    setAllMaterials(material: THREE.Material): void;
-    setVisibleAll(isVisible: boolean): void;
+    readonly dock: WaterType;
+    static readonly admittedClasses: Set<WaterClassName>;
 }
 
 export type WaterwayClassName = 'river' | 'stream' | 'tidal_channel' | 'flowline' | 'canal' | 'drain' | 'ditch' | 'pressurised';
 
-/** Manages waterway types (rivers, canals, ditches as lines). */
-export declare class WaterwayLayer {
-    isVisible: boolean;
+/** Waterway types (rivers, canals, ditches as lines). */
+export declare class WaterwayLayer extends BaseLayer<WaterwayClassName, WaterwayType> {
     readonly river: WaterwayType;
     readonly stream: WaterwayType;
     readonly tidal_channel: WaterwayType;
@@ -209,37 +298,30 @@ export declare class WaterwayLayer {
     readonly drain: WaterwayType;
     readonly ditch: WaterwayType;
     readonly pressurised: WaterwayType;
-    getTypeByName(name: WaterwayClassName): WaterwayType | null;
-    setAllMaterials(material: THREE.Material, outlineMaterial?: THREE.Material): void;
+    /** Pass `null` as `material` to change only the outlines. */
+    setAllMaterials(material: THREE.Material | null, outlineMaterial?: THREE.Material): void;
     setOutlineWidthAll(width: number): void;
     resetOutlineWidthAll(): void;
     setLineWidthAll(width: number): void;
-    setVisibleAll(isVisible: boolean): void;
-}
-
-/** Shared defaults applied to all road types unless individually overridden. */
-export declare class GeneralConfig {
-    /** Segments used to round road joints. Minimum 6. */
-    jointSegments: number;
-    /** Default outline width in world units for all road types without their own override. */
-    outlineWidth: number;
+    setJointSegmentsAll(segments: number): void;
+    setAllRenderOrder(order: number): void;
 }
 
 export type TransportClassName =
     | 'motorway' | 'trunk' | 'trunk_construction'
     | 'primary' | 'primary_construction'
     | 'secondary' | 'secondary_construction'
-    | 'tertiary' | 'minor' | 'minor_construction'
+    | 'tertiary' | 'tertiary_construction'
+    | 'minor' | 'minor_construction'
     | 'service' | 'service_construction'
-    | 'rail' | 'transit' | 'pedestrian'
+    | 'track' | 'track_construction'
     | 'path' | 'path_construction'
-    | 'track' | 'pier' | 'ferry';
+    | 'raceway' | 'raceway_construction'
+    | 'busway' | 'bus_guideway'
+    | 'rail' | 'transit' | 'pedestrian' | 'pier' | 'ferry';
 
-/** Manages all road and transport types rendered on the map. */
-export declare class TransportationLayer {
-    readonly isVisible: boolean;
-    /** Shared configuration defaults (joint segments, global outline width). */
-    readonly generalConfig: GeneralConfig;
+/** Road and transport types. OpenMapTiles `subclass` values (e.g. `pedestrian`) take precedence over `class`. */
+export declare class TransportationLayer extends BaseLayer<TransportClassName, RoadType> {
     readonly motorway: RoadType;
     readonly trunk: RoadType;
     readonly trunk_construction: RoadType;
@@ -248,28 +330,33 @@ export declare class TransportationLayer {
     readonly secondary: RoadType;
     readonly secondary_construction: RoadType;
     readonly tertiary: RoadType;
+    readonly tertiary_construction: RoadType;
     readonly minor: RoadType;
     readonly minor_construction: RoadType;
     readonly service: RoadType;
     readonly service_construction: RoadType;
+    readonly track: RoadType;
+    readonly track_construction: RoadType;
+    readonly path: RoadType;
+    readonly path_construction: RoadType;
+    readonly raceway: RoadType;
+    readonly raceway_construction: RoadType;
+    readonly busway: RoadType;
+    readonly bus_guideway: RoadType;
     readonly rail: RoadType;
     readonly transit: RoadType;
     readonly pedestrian: RoadType;
-    readonly path: RoadType;
-    readonly path_construction: RoadType;
-    readonly track: RoadType;
     readonly pier: RoadType;
     readonly ferry: RoadType;
-    /**
-     * Returns the effective outline width for a road type:
-     * the type's own value if set, otherwise `generalConfig.outlineWidth`.
-     */
-    resolveOutlineWidth(roadType: RoadType): number;
+    /** Pass `null` as `material` to change only the outlines. */
+    setAllMaterials(material: THREE.Material | null, outlineMaterial?: THREE.Material): void;
     setOutlineWidthAll(width: number): void;
     resetOutlineWidthAll(): void;
+    setJointSegmentsAll(segments: number): void;
+    setAllRenderOrder(order: number): void;
+    /** Alias for the `isVisible` setter. */
     setVisible(isVisible: boolean): void;
-    setAllMaterials(material: THREE.Material, outlineMaterial?: THREE.Material): void;
-    getTypeByName(name: TransportClassName): RoadType | null;
+    static readonly admittedClasses: Set<TransportClassName | 'motorway_construction'>;
 }
 
 // ─── MapStyle ─────────────────────────────────────────────────────────────────
