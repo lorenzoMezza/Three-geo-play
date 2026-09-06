@@ -365,14 +365,16 @@ export type StyleLayerName = 'background' | 'waterway' | 'water' | 'landcover' |
 
 /**
  * Top-level style container for a ThreeGeoPlay map.
- * Holds one instance of every renderable layer.
+ * Changes made after `start()` are applied to the loaded tiles on the next `onFrameUpdate()`.
  *
  * @example
- * const style = geoPlay.getMapConfig().mapStyle;
+ * const style = geoPlay.getMapStyle();
  * style.buildingLayer.isVisible = true;
  * style.transportationLayer.motorway.material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
  */
 export declare class MapStyle {
+    constructor();
+    /** Assigning a layer of the wrong class throws. */
     buildingLayer: BuildingLayer;
     waterLayer: WaterLayer;
     waterwayLayer: WaterwayLayer;
@@ -396,6 +398,7 @@ export declare class MapStyle {
  * Configuration for a ThreeGeoPlay map instance.
  * Modify properties directly — dirty tracking ensures only the minimum
  * necessary update runs on the next `onFrameUpdate()` call.
+ * Invalid values throw an `Error`.
  *
  * @example
  * const config = geoPlay.getMapConfig();
@@ -404,47 +407,39 @@ export declare class MapStyle {
  * config.tileLayout     = TileLayout.GRID;
  */
 export declare class MapConfig {
+    constructor();
     /**
-     * ZXY URL template for the PBF vector tile provider.
-     * Use `{z}`, `{x}`, `{y}` as placeholders.
-     * Changing this triggers a full tile rebuild.
+     * Sets several properties at once; unknown names throw.
+     * @example config.set({ tileUrl: 'https://tiles.openfreemap.org/planet', zoomLevel: 14 });
      */
+    set(values: MapConfigOptions): this;
+    /**
+     * Where the tiles come from; required before `start()`, changing it reloads all tiles:
+     * a template with `{x}`, `{y}` (and usually `{z}`), a TileJSON URL, a MapLibre / Mapbox
+     * style URL (first vector source) or a `mapbox://` URL (with `accessToken`).
+     */
+    tileUrl: string;
+    /** @deprecated Use `tileUrl`. */
     pbfTileProviderZXYurl: string;
-    /**
-     * OSM zoom level (typically 14–18). Higher = more detail.
-     * Changing this triggers a full tile rebuild.
-     */
+    /** Access token for Mapbox (`mapbox://` URLs and api.mapbox.com tiles). */
+    accessToken: string;
+    /** How tile layers map onto `MapStyle`: a `TileSchema` (default `'auto'`) or a custom function. */
+    tileSchema: TileSchema | TileSchemaFunction;
+    /** Web-Mercator zoom level, integer 0–24 (default 18). Changing it reloads all tiles. */
     zoomLevel: number;
-    /**
-     * Number of tiles to load in each direction from the origin tile.
-     */
+    /** Tiles loaded in each direction from the center tile (default 4). */
     renderDistance: number;
-    /**
-     * World-space size of one tile in Three.js units. Must be > 0.
-     */
+    /** World-space size of one tile in Three.js units, > 0 (default 1). Existing tiles are rescaled, not reloaded. */
     tileWorldSize: number;
-    /**
-     * Tile loading pattern. Use `TileLayout.CIRCULAR` or `TileLayout.GRID`.
-     * Changing this triggers a full tile rebuild.
-     */
+    /** Tile loading pattern (default `TileLayout.CIRCULAR`). */
     tileLayout: TileLayout;
-    /**
-     * Geographic coordinates of the map origin.
-     * Changing this triggers a full tile rebuild.
-     */
+    /** Geographic coordinates placed at `worldOriginOffset`. Frozen: assign a new object to change it. */
     originLatLon: LatLon;
-    /**
-     * Additional X/Z offset applied to the world origin in Three.js units.
-     * Changing this triggers a full tile rebuild.
-     */
+    /** World position of `originLatLon` (default `{ x: 0, z: 0 }`). Frozen: assign a new object to change it. */
     worldOriginOffset: WorldOffset;
-    /**
-     * Camera/map tracking mode. Use `ViewMode.FOLLOW_TARGET` or `ViewMode.MANUAL`.
-     */
+    /** Camera/map tracking mode (default `ViewMode.FOLLOW_TARGET`). */
     viewMode: ViewMode;
-    /**
-     * Active map style. Changing this triggers a material update on all tiles.
-     */
+    /** Active map style. Replacing it restyles the loaded tiles. */
     mapStyle: MapStyle;
     /** Draws a visible border around each tile — useful for debugging. */
     showTileBorders: boolean;
@@ -453,18 +448,34 @@ export declare class MapConfig {
     /** True if any property has changed since the last flush. */
     readonly _isDirty: boolean;
     readonly _dirtyFields: Set<string>;
+    /** True if a dirty field requires reloading every tile (zoom level, tile URL or access token). */
     readonly requiresRebuild: boolean;
-    /**
-     * Minimum interval in milliseconds between follow-target tile updates.
-     * `0` means update every frame.
-     */
+    /** Minimum interval in milliseconds between follow-target updates. `0` (default) means every frame. */
+    followUpdateInterval: number;
+    /** @deprecated Use `followUpdateInterval`. */
     readonly FollowUpdateInterval: number;
-    /**
-     * Sets the minimum interval between follow-target updates.
-     * @param intervalMs Milliseconds. Must be ≥ 0.
-     */
+    /** @deprecated Use `followUpdateInterval`. */
     setFollowUpdateInterval(intervalMs: number): void;
     flushDirtyState(): void;
+}
+
+/** Options accepted by `MapConfig.set()` and the `ThreeGeoPlay` constructor. */
+export interface MapConfigOptions {
+    tileUrl?: string;
+    accessToken?: string;
+    tileSchema?: TileSchema | TileSchemaFunction;
+    zoomLevel?: number;
+    renderDistance?: number;
+    tileWorldSize?: number;
+    tileLayout?: TileLayout;
+    originLatLon?: { lat: number; lon: number };
+    worldOriginOffset?: { x: number; z: number };
+    viewMode?: ViewMode;
+    mapStyle?: MapStyle;
+    showTileBorders?: boolean;
+    followUpdateInterval?: number;
+    /** @deprecated Use `tileUrl`. */
+    pbfTileProviderZXYurl?: string;
 }
 
 // ─── ThreeGeoPlay ─────────────────────────────────────────────────────────────
@@ -473,7 +484,11 @@ export declare class MapConfig {
  * Main entry point for ThreeGeoPlay.
  *
  * @example
- * const geoPlay = new ThreeGeoPlay(scene, camera, renderer);
+ * const geoPlay = new ThreeGeoPlay(scene, camera, renderer, {
+ *     tileUrl: 'https://tiles.openfreemap.org/planet',
+ *     originLatLon: { lat: 41.89, lon: 12.49 },
+ *     zoomLevel: 14,
+ * });
  * geoPlay.start();
  *
  * function animate() {
@@ -483,62 +498,81 @@ export declare class MapConfig {
  * }
  * animate();
  */
-export declare class ThreeGeoPlay {
+/** Events dispatched by `ThreeGeoPlay`. */
+export interface ThreeGeoPlayEventMap {
+    /** The tile source is resolved. */
+    sourceload: { source: TileSource };
+    /** The tile source could not be loaded (e.g. wrong access token); no retry for configuration errors. */
+    sourceerror: { error: Error; willRetry: boolean };
+}
+
+export declare class ThreeGeoPlay extends THREE.EventDispatcher<ThreeGeoPlayEventMap> {
     /**
      * @param threeScene    Three.js scene.
      * @param threeCamera   Three.js camera (also the default follow target).
      * @param threeRenderer Three.js renderer.
+     * @param options       Initial `MapConfig` values.
      */
-    constructor(threeScene: THREE.Scene, threeCamera: THREE.Camera, threeRenderer: THREE.WebGLRenderer);
+    constructor(threeScene: THREE.Scene, threeCamera: THREE.Camera, threeRenderer: THREE.WebGLRenderer, options?: MapConfigOptions);
 
     /**
-     * Sets the object the map will follow in `FOLLOW_TARGET` mode.
+     * Sets the object the map follows in `FOLLOW_TARGET` mode (its world position is used).
      * Automatically switches `viewMode` to `FOLLOW_TARGET` if needed.
-     * @param target Any Three.js Object3D (mesh, group, camera, …).
      */
     setFollowTarget(target: THREE.Object3D): void;
 
     /**
-     * Moves the map origin to geographic coordinates.
-     * Only effective in `MANUAL` mode.
-     * @param lat Latitude  −90 … 90.
-     * @param lon Longitude −180 … 180.
+     * Places the given coordinates at the world origin and centers the map there.
+     * Switches to `MANUAL` mode if needed.
      */
     moveMapOriginToLatLon(lat: number, lon: number): void;
 
     /**
-     * Moves the map origin to a Three.js world-space position.
-     * Automatically switches to `MANUAL` mode if needed.
+     * Centers the loaded area on a world-space X/Z position without changing the
+     * geographic origin. Switches to `MANUAL` mode if needed.
      */
     moveMapOriginToPosition(x: number, z: number): void;
 
+    /** Converts geographic coordinates to world-space X/Z with the current config. */
+    latLonToWorld(lat: number, lon: number): WorldPosition;
+
+    /** Converts a world-space X/Z position to geographic coordinates with the current config. */
+    worldToLatLon(x: number, z: number): { lat: number; lon: number };
+
     /**
-     * Initialises the map and loads the first set of tiles.
-     * Call once after setting up `MapConfig` and `MapStyle`.
+     * Adds the map to the scene and starts loading tiles.
+     * @throws If `tileUrl` has not been set.
      */
     start(): void;
 
-    /**
-     * Processes per-frame updates. **Must be called every frame in your animation loop.**
-     */
+    /** Processes per-frame updates. **Must be called every frame in your animation loop.** */
     onFrameUpdate(): void;
 
     /** Returns the active `MapConfig`. Modify its properties to change map behaviour. */
     getMapConfig(): MapConfig;
 
-    /** Replaces the entire map configuration. */
+    /** Replaces the entire map configuration (applied immediately if the map is running). */
     setMapConfig(mapConfig: MapConfig): void;
 
-    /** Returns the active `MapStyle`. */
+    /** Returns the active `MapStyle` (same as `getMapConfig().mapStyle`). */
     getMapStyle(): MapStyle;
 
     /** Replaces the active map style. */
     setMapStyle(mapStyle: MapStyle): void;
 
+    /** Loading progress of the tiles in the current render area (all zero before `start()`). */
+    getTileStats(): TileStats;
+
+    /** Resolved tile source, including the attribution to display; `null` before `start()` / while loading (see the `sourceload` event). */
+    getTileSource(): TileSource | null;
+
+    /** The group containing every map mesh (useful for raycasting or toggling visibility). */
+    getMapGroup(): THREE.Group;
+
     getScene(): THREE.Scene;
     getCamera(): THREE.Camera;
     getRenderer(): THREE.WebGLRenderer;
 
-    /** Destroys the instance and releases all resources. */
+    /** Removes the map from the scene, stops downloads and frees geometry. Materials are not disposed. */
     destroy(): void;
 }
