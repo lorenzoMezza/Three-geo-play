@@ -11,12 +11,15 @@ ThreeGeoPlay is a JavaScript library that fetches [Vector Tiles (MVT/PBF)](https
 ## Features
 
 - 🗺️ **Vector tile rendering** — roads, buildings, waterways, land use, and more
-- 🏙️ **3D building extrusion** — real heights from OSM data
-- 🎨 **Fully styleable** — swap materials, colors, and visibility per layer
-- 📡 **Auto tile loading** — smart queue with concurrency, abort, and retry
+- 🏙️ **3D building extrusion** — true-scale heights from OSM data
+- 🎨 **Fully styleable** — swap materials, colors, and visibility per layer, live
+- 🔌 **Any vector tile provider** — OpenMapTiles (MapTiler, OpenFreeMap), MapLibre styles, Mapbox, or your own schema
+- 📡 **Auto tile loading** — nearest-first queue with concurrency, abort, timeouts, and retry with backoff
+- 🚀 **Few draw calls** — geometry of all tiles is batched per material (one draw call each)
 - 🎮 **Follow mode** — attach to any `THREE.Object3D` (camera, player…) and the map follows
+- 🧭 **Geo ↔ world conversions** — place objects at real coordinates
 - 🔲 **Circular or square** render regions
-- ⚡ **Zero dependencies** beyond Three.js
+- ⚡ **Zero dependencies** beyond Three.js (built-in vector tile decoder)
 
 ---
 
@@ -32,7 +35,7 @@ npm i lm-three-geo-play
 
 ```js
 import * as THREE from 'three';
-import { ThreeGeoPlay } from 'three-geo-play';
+import { ThreeGeoPlay } from 'lm-three-geo-play';
 
 const scene    = new THREE.Scene();
 const camera   = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 10000);
@@ -40,16 +43,15 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-const geo = new ThreeGeoPlay(scene, camera, renderer);
+const geo = new ThreeGeoPlay(scene, camera, renderer, {
+  tileUrl:        'https://tiles.openfreemap.org/planet',   // free OpenMapTiles source (TileJSON)
+  originLatLon:   { lat: 41.9028, lon: 12.4964 },           // Rome
+  zoomLevel:      14,
+  tileWorldSize:  50,
+  renderDistance: 6,
+});
 
-const config = geo.getMapConfig();
-config.originLatLon          = { lat: 41.9028, lon: 12.4964 }; // Rome
-config.pbfTileProviderZXYurl = 'https://your-tile-server/{z}/{x}/{y}.pbf';
-config.zoomLevel             = 16;
-config.tileWorldSize         = 50;
-config.renderDistance        = 6;
-
-geo.start();
+geo.start(); // adds the map to the scene (see geo.getMapGroup())
 
 function animate() {
   requestAnimationFrame(animate);
@@ -63,12 +65,12 @@ animate();
 
 ## Styling
 
-Access the style through `MapConfig` and modify materials directly on each layer type:
+Access the style with `geo.getMapStyle()` (same object as `getMapConfig().mapStyle`) and modify each layer type directly. Changes are applied to the tiles already on screen on the next `onFrameUpdate()` — no reload needed:
 
 ```js
 import * as THREE from 'three';
 
-const style = geo.getMapConfig().mapStyle;
+const style = geo.getMapStyle();
 
 // Roads
 style.transportationLayer.primary.material        = new THREE.MeshBasicMaterial({ color: 0xffffff });
