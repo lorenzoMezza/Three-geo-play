@@ -1,2 +1,44 @@
-# Three-geo-play-demo-website
-demo website
+# ThreeGeoPlay — demo website
+
+Live demo of [ThreeGeoPlay](https://github.com/lorenzoMezza/Three-geo-play): OpenStreetMap vector tiles rendered as 3D Three.js geometry.
+
+🔴 **Live:** https://lorenzomezza.github.io/Three-geo-play-demo-website/
+
+## What it shows
+
+- Tiles loaded around the camera (follow mode, the default), around the point you look at, or manually
+- Live restyling of every layer: colours, visibility, outlines, building height and opacity, lit materials
+- Themes (default / night) applied to the tiles already on screen
+- Jumping to real places, geographic coordinates of the view
+- Switching tile provider live: the local tile set, OpenFreeMap through its MapLibre style URL, or Mapbox Streets with your access token
+
+## Tiles
+
+`public/tiles` contains an OpenMapTiles-schema tile set at **zoom 16 only**, covering Rome and most of Lazio
+(lat 41.24…42.84, lon 11.45…14.03). Files are named `Y{y}X{x}.pbf`, so the map uses that URL template
+and a fixed zoom level. Map data © [OpenMapTiles](https://openmaptiles.org/) © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright).
+
+## Development
+
+The demo is built against the library **source**, so it always reflects the latest code.
+`vite.config.js` looks for it in this order:
+
+1. the folder in the `THREE_GEO_PLAY_SRC` environment variable;
+2. `../Three-geo-play/src` — the library repository cloned next to this one;
+3. `../../src` — this repository checked out inside the library repository;
+4. otherwise the `lm-three-geo-play` npm package (`npm i lm-three-geo-play`).
+
+```bash
+git clone https://github.com/lorenzoMezza/Three-geo-play.git
+git clone https://github.com/lorenzoMezza/Three-geo-play-demo-website.git
+cd Three-geo-play-demo-website
+npm install
+npm run dev      # http://localhost:3000/Three-geo-play-demo-website/
+npm run build    # production build in dist/
+```
+
+## Deployment
+
+Pushing to `main` runs `.github/workflows/static.yml`, which checks out this repository and the library,
+builds the site and publishes `dist/` to GitHub Pages. After changing the library, run the workflow manually
+from the Actions tab to redeploy the demo with the new code. `dist/` is a build output and is not committed.
