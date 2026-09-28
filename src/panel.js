@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { MapStyle, TileLayout } from 'lm-three-geo-play'
 
 import { PLACES, SOURCES, TILESET, isInsideTileset } from './tileset.js'
-import { applyNightTheme } from './themes.js'
+import { applyDayTheme, applyNightTheme } from './themes.js'
 import {
     section, subheading, hint, slider, toggle, select, segmented, color, button, chips, coordinates,
     inputWithButton, legendHeader, legendRow, refreshAll,
@@ -20,6 +20,23 @@ const LANDUSE_TYPES = [
     'pitch', 'stadium', 'cemetery', 'religious', 'military', 'railway', 'quarter', 'recreation_ground',
 ]
 const WATER_TYPES = ['ocean', 'lake', 'river', 'pond']
+
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+const compass = degrees => `${COMPASS[Math.round(degrees / 45) % 8]} · ${Math.round(degrees)}°`
+
+/**
+ * Same material with another shading model: `MeshLambertMaterial` (lit by the
+ * sun, receives shadows) or `MeshBasicMaterial` (unlit, shading baked by the library).
+ */
+function withLighting(material, lit) {
+    const Type = lit ? THREE.MeshLambertMaterial : THREE.MeshBasicMaterial
+    return new Type({
+        color:        material.color,
+        opacity:      material.opacity,
+        transparent:  material.transparent,
+        vertexColors: material.vertexColors,
+    })
+}
 
 /**
  * Returns the material of `type[prop]` that can be recoloured without affecting
@@ -168,6 +185,7 @@ export function buildPanel(root, app) {
         set: name => {
             const next = new MapStyle()
             if (name === 'night') applyNightTheme(next)
+            else applyDayTheme(next)
             geo.setMapStyle(next)
             theme = name
             app.atmosphere.resample()
@@ -175,39 +193,69 @@ export function buildPanel(root, app) {
         },
     })
 
+    // ── Sun & shadows ────────────────────────────────────────────────────────
+    const sunSec = section(root, { title: 'Sun & shadows', open: true })
+    const lighting = app.lighting
+    toggle(sunSec, { label: 'Shadows', get: () => lighting.shadows, set: v => { lighting.shadows = v } })
+    slider(sunSec, {
+        label: 'Sun direction', min: 0, max: 355, step: 5,
+        get: () => lighting.azimuth, set: v => { lighting.azimuth = v },
+        format: compass,
+    })
+    slider(sunSec, {
+        label: 'Sun height', min: 5, max: 85, step: 1,
+        get: () => lighting.elevation, set: v => { lighting.elevation = v },
+        format: v => `${v}°`,
+    })
+    slider(sunSec, {
+        label: 'Shadow strength', min: 0, max: 1, step: 0.02,
+        get: () => style().shadowLayer.material.opacity, set: v => { style().shadowLayer.material.opacity = v },
+        format: v => `${Math.round(v * 100)}%`,
+    })
+    hint(sunSec, 'Buildings cast shadows on the map and on each other; anything you add to the scene can join in.')
+
     // ── Buildings ────────────────────────────────────────────────────────────
-    const bld = section(root, { title: 'Buildings' })
+    const bld = section(root, { title: 'Buildings', open: true })
     const buildings = () => style().buildingLayer
     toggle(bld, { label: 'Show buildings', get: () => buildings().isVisible, set: v => { buildings().isVisible = v } })
-    toggle(bld, {
-        label: 'Shaded walls',
-        get: () => !buildings().material.isMeshBasicMaterial,
-        set: lit => {
-            const old  = buildings().material
-            const Type = lit ? THREE.MeshStandardMaterial : THREE.MeshBasicMaterial
-            buildings().material = new Type({
-                color:       old.color,
-                opacity:     old.opacity,
-                transparent: old.transparent,
-                side:        old.side,
-                ...(lit ? { roughness: 0.9, metalness: 0 } : {}),
-            })
-        },
+    segmented(bld, {
+        label: 'Shading',
+        options: [['lit', 'Sun'], ['baked', 'Baked']],
+        get: () => (buildings().material.isMeshBasicMaterial ? 'baked' : 'lit'),
+        set: v => { buildings().material = withLighting(buildings().material, v === 'lit'); refreshAll() },
     })
-    color(bld, { label: 'Color', get: () => buildings().material.color, set: v => buildings().material.color.set(v) })
+    color(bld, { label: 'Walls', get: () => buildings().material.color, set: v => buildings().material.color.set(v) })
+    color(bld, { label: 'Roof tint', get: () => buildings().roofColor, set: v => { buildings().roofColor = v } })
     slider(bld, {
         label: 'Opacity', min: 0.1, max: 1, step: 0.05,
         get: () => buildings().material.opacity,
         set: v => {
             const m = buildings().material
-            const transparent = v < 1
-            m.opacity    = v
-            m.depthWrite = !transparent
-            if (m.transparent !== transparent) {
-                m.transparent = transparent
+            m.opacity = v
+            if (m.transparent !== v < 1) {
+                m.transparent = v < 1
                 m.needsUpdate = true
             }
         },
+        format: v => `${Math.round(v * 100)}%`,
+    })
+    toggle(bld, {
+        label: 'Glass: hide inner walls',
+        get: () => buildings().depthPrepass, set: v => { buildings().depthPrepass = v },
+    })
+    slider(bld, {
+        label: 'Ambient occlusion', min: 0, max: 1, step: 0.05,
+        get: () => buildings().ambientOcclusion, set: v => { buildings().ambientOcclusion = v },
+        format: v => `${Math.round(v * 100)}%`,
+    })
+    slider(bld, {
+        label: 'Baked wall shading', min: 0, max: 1, step: 0.05,
+        get: () => buildings().wallShading, set: v => { buildings().wallShading = v },
+        format: v => `${Math.round(v * 100)}%`,
+    })
+    slider(bld, {
+        label: 'Roof variation', min: 0, max: 0.3, step: 0.01,
+        get: () => buildings().colorVariation, set: v => { buildings().colorVariation = v },
         format: v => `${Math.round(v * 100)}%`,
     })
     slider(bld, {
@@ -215,6 +263,7 @@ export function buildPanel(root, app) {
         get: () => buildings().height, set: v => { buildings().height = v },
         format: v => (v === 1 ? 'true scale' : `${v.toFixed(1)}×`),
     })
+    toggle(bld, { label: 'Cast shadows', get: () => buildings().castShadow, set: v => { buildings().castShadow = v } })
 
     // ── Roads ────────────────────────────────────────────────────────────────
     const roadsSec  = section(root, { title: 'Roads' })

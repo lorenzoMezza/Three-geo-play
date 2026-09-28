@@ -3,8 +3,22 @@ import * as THREE from 'three'
 const basic = color => new THREE.MeshBasicMaterial({ color })
 
 /**
+ * Daytime look: the default map colours, with buildings lit by the sun of the
+ * demo (they cast and receive shadows) and warm roofs.
+ * @param {import('lm-three-geo-play').MapStyle} style
+ */
+export function applyDayTheme(style) {
+    const buildings = style.buildingLayer
+    // `vertexColors` adds the library's baked ambient occlusion and roof tones to the lighting.
+    buildings.material  = new THREE.MeshLambertMaterial({ color: 0xf1ebe0, vertexColors: true })
+    buildings.roofColor = 0xf6ebe2
+    style.shadowLayer.material.opacity = 0.32
+}
+
+/**
  * Dark "night" look, built only with the public style API.
  * Apply it to a fresh `MapStyle` so no previous customisation leaks through.
+ * Buildings use an unlit material: their shading is baked by the library.
  * @param {import('lm-three-geo-play').MapStyle} style
  */
 export function applyNightTheme(style) {
@@ -21,10 +35,9 @@ export function applyNightTheme(style) {
     for (const name of ['motorway', 'trunk', 'primary']) roads[name].material = arterial
     for (const name of ['secondary', 'tertiary'])        roads[name].material = main
 
-    style.buildingLayer.material = new THREE.MeshBasicMaterial({
-        color:       0x39415a,
-        opacity:     0.92,
-        transparent: true,
-        side:        THREE.DoubleSide,
-    })
+    // Roofs get the material colour, walls are darkened by the baked shading.
+    const buildings = style.buildingLayer
+    buildings.material    = new THREE.MeshBasicMaterial({ color: 0x4f5a7a, vertexColors: true })
+    buildings.wallShading = 0.75
+    style.shadowLayer.material.opacity = 0.45
 }

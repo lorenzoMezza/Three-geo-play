@@ -7,7 +7,10 @@ Live demo of [ThreeGeoPlay](https://github.com/lorenzoMezza/Three-geo-play): Ope
 ## What it shows
 
 - Tiles loaded around the camera (follow mode, the default), around the point you look at, or manually
-- Live restyling of every layer: colours, visibility, outlines, building height and opacity, lit materials
+- Solid 3D buildings with baked ambient occlusion and wall shading, lit by a sun you can move
+- Real-time shadows: buildings shade the map and each other (the style's shadow layer draws them on the unlit map)
+- Transparent buildings drawn as a single layer of "glass" — no inner walls
+- Live restyling of every layer: colours, visibility, outlines, building height, opacity, roof tint, sun or baked shading
 - Themes (default / night) applied to the tiles already on screen
 - Jumping to real places, geographic coordinates of the view
 - Switching tile provider live: the local tile set, OpenFreeMap through its MapLibre style URL, or Mapbox Streets with your access token

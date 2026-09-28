@@ -4,6 +4,8 @@ import { ThreeGeoPlay, TileLayout, ViewMode } from 'lm-three-geo-play'
 
 import { SOURCES, PLACES, isInsideTileset } from './src/tileset.js'
 import { Atmosphere, installRadialFog } from './src/atmosphere.js'
+import { Lighting } from './src/lighting.js'
+import { applyDayTheme } from './src/themes.js'
 import { buildPanel } from './src/panel.js'
 import './style.css'
 
@@ -29,12 +31,9 @@ controls.minDistance        = 2
 controls.maxDistance        = 20000
 controls.maxPolarAngle      = Math.PI / 2 - 0.05
 
-// Lights only affect lit materials ("Lit material" option for buildings);
-// the default map materials are unlit.
-scene.add(new THREE.HemisphereLight(0xffffff, 0x445066, 1.6))
-const sun = new THREE.DirectionalLight(0xffffff, 2.2)
-sun.position.set(-150, 300, 120)
-scene.add(sun)
+// Sun and sky. The flat map layers are unlit; the buildings of the day theme are
+// lit, and the sun's shadows fall on the map through the style's shadow layer.
+const lighting = new Lighting({ scene, renderer, camera, target: controls.target })
 
 // ─── Map ────────────────────────────────────────────────────────────────────
 const sourceOptions = ({ tileUrl, zoomLevel, tileWorldSize, renderDistance }) => ({ tileUrl, zoomLevel, tileWorldSize, renderDistance })
@@ -45,6 +44,7 @@ const geo = new ThreeGeoPlay(scene, camera, renderer, {
     originLatLon: { lat: PLACES[0].lat, lon: PLACES[0].lon },
 })
 const config = geo.getMapConfig()
+applyDayTheme(geo.getMapStyle())
 
 // The camera is the library's default follow target: tiles load around its X/Z.
 geo.start()
@@ -103,7 +103,7 @@ const loading = {
 }
 
 // Sky and circular fog in the colour of the ground, ending at the edge of the drawn tiles.
-const atmosphere = new Atmosphere({ scene, renderer, geo, getCenter: () => loading.center() })
+const atmosphere = new Atmosphere({ scene, geo, getCenter: () => loading.center() })
 
 /** Places the given coordinates at the world origin and moves the view there. */
 function flyTo(lat, lon) {
@@ -116,7 +116,7 @@ function flyTo(lat, lon) {
 }
 
 // ─── UI ─────────────────────────────────────────────────────────────────────
-buildPanel(document.getElementById('panel-body'), { geo, controls, flyTo, atmosphere, loading, source })
+buildPanel(document.getElementById('panel-body'), { geo, controls, flyTo, atmosphere, lighting, loading, source })
 
 const panel     = document.getElementById('panel')
 const openPanel = document.getElementById('panel-open')
@@ -184,7 +184,7 @@ function updateAttribution() {
 }
 
 // Debug handle for the browser console during development (`demo.geo`, `demo.camera`, …).
-if (import.meta.env.DEV) window.demo = { geo, camera, controls, scene, renderer, focus, atmosphere, loading, source }
+if (import.meta.env.DEV) window.demo = { THREE, geo, camera, controls, scene, renderer, focus, atmosphere, lighting, loading, source }
 
 // ─── Loop ───────────────────────────────────────────────────────────────────
 const timer = new THREE.Timer()
@@ -196,8 +196,8 @@ renderer.setAnimationLoop(time => {
     focus.position.copy(controls.target)
     geo.onFrameUpdate()
     atmosphere.update(dt)
+    lighting.update()
     renderer.render(scene, camera)
-    atmosphere.afterRender(time)
 })
 
 window.addEventListener('resize', () => {
