@@ -1,5 +1,6 @@
 import { MapStyle } from '../style/MapStyle.js';
 import { TileSchema } from '../utils/tileSchemas.js';
+import { tileSizeInMeters } from '../geo_utils/projection.js';
 
 /**
  * Fields whose change discards every loaded tile and downloads them again.
@@ -12,7 +13,7 @@ const REBUILD_REQUIRED_FIELDS = new Set(['zoomLevel', 'tileUrl', 'accessToken'])
 const SETTABLE = new Set([
     'tileUrl', 'accessToken', 'tileSchema', 'zoomLevel', 'renderDistance', 'tileWorldSize',
     'tileLayout', 'originLatLon', 'worldOriginOffset', 'viewMode', 'mapStyle',
-    'showTileBorders', 'followUpdateInterval', 'occludeBelowGround', 'pbfTileProviderZXYurl',
+    'showTileBorders', 'followUpdateInterval', 'occludeBelowGround', 'unitsPerMeter', 'pbfTileProviderZXYurl',
 ]);
 
 const MIN_ZOOM = 0;
@@ -94,6 +95,12 @@ export class MapConfig {
      * @type {number}
      */
     #tileWorldSize = 1;
+
+    /**
+     * World units per metre; when set, {@link tileWorldSize} follows from it.
+     * @type {number|null}
+     */
+    #unitsPerMeter = null;
 
     /**
      * @type {TileLayout}
@@ -272,6 +279,7 @@ export class MapConfig {
         }
         this.#zoomLevel = value;
         this.#dirtyFields.add('zoomLevel');
+        if (this.#unitsPerMeter !== null) this.#dirtyFields.add('tileWorldSize');
     }
 
     /**
@@ -290,14 +298,40 @@ export class MapConfig {
     /**
      * World-space size of one tile in Three.js units. Must be a positive number.
      * Changing this rescales existing tiles without downloading them again.
+     * With {@link unitsPerMeter} set it is derived from it (and setting it
+     * clears {@link unitsPerMeter}).
      * @type {number}
      */
-    get tileWorldSize() { return this.#tileWorldSize; }
+    get tileWorldSize() {
+        return this.#unitsPerMeter === null
+            ? this.#tileWorldSize
+            : tileSizeInMeters(this.#originLatLon.lat, this.#zoomLevel) * this.#unitsPerMeter;
+    }
     set tileWorldSize(value) {
         if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
             throw new Error(`ThreeGeoPlay: Invalid tileWorldSize: ${value}. Must be a positive number`);
         }
         this.#tileWorldSize = value;
+        this.#unitsPerMeter = null;
+        this.#dirtyFields.add('tileWorldSize');
+    }
+
+    /**
+     * Scale of the map in world units per metre, e.g. `1` for a scene in
+     * metres. When set, {@link tileWorldSize} is derived from it — and kept
+     * right when the zoom level or the origin latitude change — so distances and
+     * building heights are true to that scale around the origin (Web Mercator
+     * stretches them slowly away from it). `null` (default) uses
+     * {@link tileWorldSize} instead; setting {@link tileWorldSize} clears it.
+     * @type {number|null}
+     */
+    get unitsPerMeter() { return this.#unitsPerMeter; }
+    set unitsPerMeter(value) {
+        if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value <= 0)) {
+            throw new Error(`ThreeGeoPlay: Invalid unitsPerMeter: ${value}. Must be a positive number or null`);
+        }
+        if (value === null) this.#tileWorldSize = this.tileWorldSize;   // keep the current scale
+        this.#unitsPerMeter = value;
         this.#dirtyFields.add('tileWorldSize');
     }
 
@@ -332,6 +366,7 @@ export class MapConfig {
         }
         this.#originLatLon = Object.freeze({ lat, lon });
         this.#dirtyFields.add('originLatLon');
+        if (this.#unitsPerMeter !== null) this.#dirtyFields.add('tileWorldSize');
     }
 
     /**

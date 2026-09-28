@@ -204,6 +204,14 @@ export class TransportationLayer extends BaseLayer {
     }
 
     /**
+     * Sets `lineWidth` on every transportation type.
+     * @param {number} width
+     */
+    setLineWidthAll(width) {
+        this._allTypes().forEach(t => { t.lineWidth = width; });
+    }
+
+    /**
      * Restores the default outline width on all road types.
      */
     resetOutlineWidthAll() {

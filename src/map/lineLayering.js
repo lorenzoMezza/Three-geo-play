@@ -59,10 +59,15 @@ export class LineLayering {
     /** @type {Map<import('../style/core/Linefeaturetype.js').LineFeatureType, number>} */
     #fillRank = new Map();
 
+    /** Converts metres to `lineWidth` units, so both kinds of width rank together. */
+    #metersToRelative;
+
     /**
      * @param {import('../style/MapStyle.js').MapStyle} mapStyle
+     * @param {number} [metersToRelative=0] - `lineWidth` units per metre.
      */
-    constructor(mapStyle) {
+    constructor(mapStyle, metersToRelative = 0) {
+        this.#metersToRelative = metersToRelative;
         const typesByOrder = new Map();
         for (const name of LINE_LAYERS) {
             const layer = mapStyle.getStyleLayerByName(name);
@@ -76,10 +81,10 @@ export class LineLayering {
         }
 
         for (const types of typesByOrder.values()) {
-            types.sort((a, b) => a.lineWidth - b.lineWidth);
+            types.sort((a, b) => this.#width(a) - this.#width(b));
             let run = [];
             const closeRun = () => {
-                const rank = widthRank(run[run.length - 1].lineWidth);
+                const rank = widthRank(this.#width(run[run.length - 1]));
                 for (const type of run) this.#fillRank.set(type, rank);
                 run = [];
             };
@@ -108,8 +113,15 @@ export class LineLayering {
      */
     fillOrder(style, level, isRamp = false) {
         const rank = isRamp
-            ? widthRank(style.lineWidth * 0.5)
-            : this.#fillRank.get(style) ?? widthRank(style.lineWidth);
+            ? widthRank(this.#width(style) * 0.5)
+            : this.#fillRank.get(style) ?? widthRank(this.#width(style));
         return style.renderingOrder + (level + MAX_LEVEL + 0.5 + 0.45 * rank) * LEVEL_SPAN;
+    }
+
+    /** Width of a type in `lineWidth` units, whichever way it was given. */
+    #width(style) {
+        return style.lineWidthMeters === null || style.lineWidthMeters === undefined
+            ? style.lineWidth
+            : style.lineWidthMeters * this.#metersToRelative;
     }
 }

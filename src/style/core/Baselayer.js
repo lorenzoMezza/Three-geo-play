@@ -63,6 +63,22 @@ export class BaseLayer {
         return stamp;
     }
 
+    /**
+     * Copies the settings of another layer of the same kind (used by
+     * {@link MapStyle#clone}).
+     * @param {BaseLayer} source
+     * @param {(material: THREE.Material|null) => THREE.Material|null} copyMaterial
+     * @protected
+     */
+    _copyFrom(source, copyMaterial) {
+        this.#isVisible = source.isVisible;
+        for (const [name, type] of this.#typeMap) {
+            const other = source.getTypeByName(name);
+            if (other) type._copyFrom(other, copyMaterial);
+        }
+        this.#stamp = nextStyleStamp();
+    }
+
     // ── public API ───────────────────────────────────────────────────────────
 
     /**
@@ -77,6 +93,13 @@ export class BaseLayer {
         this.#isVisible = !!v;
         this.#stamp     = nextStyleStamp();
     }
+
+    /**
+     * Alias of {@link isVisible}, named like `THREE.Object3D#visible`.
+     * @type {boolean}
+     */
+    get visible()  { return this.isVisible; }
+    set visible(v) { this.isVisible = v; }
 
     /**
      * Returns a feature type by its OSM class name, or `null` if not found.
