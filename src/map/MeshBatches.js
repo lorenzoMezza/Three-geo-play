@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 
+import { drawWithoutDepthWrite, drawWithDepthPrepass } from './drawHooks.js';
+
 /** Initial capacity of a batch; it doubles whenever it runs out of room. */
 const INITIAL_VERTICES  = 1 << 15;
 const INITIAL_INSTANCES = 32;
@@ -16,9 +18,12 @@ const BATCHING_SUPPORTED =
 
 /**
  * @typedef {Object} BatchDescriptor
- * @property {string}         kind        - 'line' | 'outline' | 'polygon' | 'building'
+ * @property {string}         kind          - 'line' | 'outline' | 'polygon' | 'building'
  * @property {THREE.Material} material
- * @property {number|null}    renderOrder - `null` for depth-tested geometry (buildings).
+ * @property {number|null}    renderOrder   - `null` for solid geometry (buildings).
+ * @property {boolean}        castShadow
+ * @property {boolean}        receiveShadow
+ * @property {boolean}        [depthPrepass] - Buildings: draw transparent materials with a depth pre-pass.
  */
 
 /**
@@ -62,7 +67,11 @@ export class MeshBatches {
             return new MeshHandle(descriptor, geometry, tileObject);
         }
 
-        const key = `${descriptor.kind}|${material.id}|${descriptor.renderOrder}|${geometry.hasAttribute('normal')}`;
+        const key = [
+            descriptor.kind, material.id, descriptor.renderOrder,
+            descriptor.castShadow, descriptor.receiveShadow, descriptor.depthPrepass,
+            geometry.hasAttribute('normal'), geometry.hasAttribute('color'),
+        ].join('|');
         let batch = this.#batches.get(key);
         if (!batch) {
             batch = new Batch(descriptor, this.#root, () => this.#batches.delete(key));
@@ -96,21 +105,18 @@ class Batch {
     #freedVertices = 0;
     #count = 0;
     #onEmpty;
+    /** @type {THREE.Material|null} */
+    #prepass;
 
-    constructor({ kind, material, renderOrder }, root, onEmpty) {
+    constructor(descriptor, root, onEmpty) {
         this.#onEmpty = onEmpty;
-        const mesh = new THREE.BatchedMesh(INITIAL_INSTANCES, INITIAL_VERTICES, INITIAL_VERTICES * 2, material);
+        const mesh = new THREE.BatchedMesh(INITIAL_INSTANCES, INITIAL_VERTICES, INITIAL_VERTICES * 2, descriptor.material);
         mesh.name                   = 'ThreeGeoPlayBatch';
-        mesh.userData.kind          = kind;
         mesh.matrixAutoUpdate       = false;
         mesh.frustumCulled          = false;  // culled per tile instead
         mesh.perObjectFrustumCulled = true;
-        mesh.sortObjects            = renderOrder === null || renderOrder === undefined;
-        if (!mesh.sortObjects) {
-            // Flat map layers are stacked by render order instead of depth.
-            material.depthTest = false;
-            mesh.renderOrder   = renderOrder;
-        }
+        mesh.sortObjects            = descriptor.kind === 'building';  // front to back (early depth rejection)
+        this.#prepass = setUpDraw(mesh, descriptor);
         root.add(mesh);
         this.mesh = mesh;
     }
@@ -140,6 +146,7 @@ class Batch {
     dispose() {
         this.mesh.removeFromParent();
         this.mesh.dispose();
+        this.#prepass?.dispose();
         this.#onEmpty();
     }
 
@@ -170,16 +177,14 @@ class Batch {
 class MeshHandle {
 
     #mesh;
+    /** @type {THREE.Material|null} */
+    #prepass;
 
-    constructor({ kind, material, renderOrder }, geometry, tileObject) {
+    constructor(descriptor, geometry, tileObject) {
         geometry.computeBoundingSphere();
-        const mesh = new THREE.Mesh(geometry, material);
+        const mesh = new THREE.Mesh(geometry, descriptor.material);
         mesh.matrixAutoUpdate = false;
-        mesh.userData.kind    = kind;
-        if (renderOrder !== null && renderOrder !== undefined) {
-            material.depthTest = false;
-            mesh.renderOrder   = renderOrder;
-        }
+        this.#prepass = setUpDraw(mesh, descriptor);
         tileObject.add(mesh);
         this.#mesh = mesh;
     }
@@ -192,6 +197,29 @@ class MeshHandle {
         if (!this.#mesh) return;
         this.#mesh.removeFromParent();
         this.#mesh.geometry.dispose();
+        this.#prepass?.dispose();
         this.#mesh = null;
     }
+}
+
+/**
+ * Configures how a map mesh is drawn. The material is never modified:
+ * flat layers only skip depth writes during their own draw, and buildings are
+ * plain solid geometry (with a depth pre-pass when their material is transparent).
+ *
+ * @param {THREE.Mesh} mesh
+ * @param {BatchDescriptor} descriptor
+ * @returns {THREE.Material|null} The depth pre-pass material to dispose with the mesh, if any.
+ */
+function setUpDraw(mesh, { kind, renderOrder, castShadow, receiveShadow, depthPrepass }) {
+    mesh.userData.kind = kind;
+    mesh.castShadow    = !!castShadow;
+    mesh.receiveShadow = !!receiveShadow;
+    if (kind === 'building') {
+        return depthPrepass ? drawWithDepthPrepass(mesh) : null;
+    }
+    // Flat map layers are stacked by render order instead of depth.
+    mesh.renderOrder = renderOrder;
+    drawWithoutDepthWrite(mesh);
+    return null;
 }

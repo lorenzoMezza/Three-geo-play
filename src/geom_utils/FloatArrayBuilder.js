@@ -29,6 +29,17 @@ export class FloatArrayBuilder {
     }
 
     /**
+     * Appends three values (one XYZ vertex, normal or colour).
+     */
+    push3(a, b, c) {
+        this.reserve(3);
+        const array = this.array;
+        const i     = this.length;
+        array[i] = a; array[i + 1] = b; array[i + 2] = c;
+        this.length = i + 3;
+    }
+
+    /**
      * Appends one triangle (three XYZ vertices).
      */
     pushTriangle(ax, ay, az, bx, by, bz, cx, cy, cz) {

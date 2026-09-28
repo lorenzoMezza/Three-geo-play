@@ -168,6 +168,7 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
     #createTileManager(center) {
         this.#tileManager = new TileManager(this.#mapConfig, this.#mapGroup, (type, detail) => this.dispatchEvent({ type, ...detail }));
         this.#tileManager.setCenterPosition(center);
+        this.#tileManager.setShadowsEnabled(this.#renderer.shadowMap?.enabled === true);
         this.#mapConfig.flushDirtyState();
         this.#lastStyle      = this.#mapConfig.mapStyle;
         this.#lastStyleStamp = this.#lastStyle._stamp;
@@ -358,6 +359,7 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
             }
         }
 
+        tileManager.setShadowsEnabled(this.#renderer.shadowMap?.enabled === true);
         tileManager.update();
     }
 

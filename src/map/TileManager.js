@@ -6,6 +6,7 @@ import fetchTileData                          from '../utils/fetchTileData.js';
 import { isTileTemplate, resolveTileSource, templateSource, redactToken } from '../utils/tileSource.js';
 import { Tile }                               from './Tile.js';
 import { MeshBatches }                        from './MeshBatches.js';
+import { drawWithoutDepthWrite }              from './drawHooks.js';
 
 /** Maximum number of tile downloads in flight. */
 const MAX_CONCURRENT_FETCHES = 16;
@@ -22,6 +23,14 @@ const RETRY_MAX_DELAY_MS  = 16000;
 const BUILD_BUDGET_MS = 8;
 
 const now = typeof performance !== 'undefined' ? () => performance.now() : () => Date.now();
+
+/**
+ * The ground depth plane is drawn before everything else, so the whole scene
+ * is depth tested against the ground.
+ */
+const GROUND_DEPTH_RENDER_ORDER = -Number.MAX_SAFE_INTEGER;
+
+const noRaycast = () => {};
 
 /** @enum {number} */
 const State = Object.freeze({
@@ -96,13 +105,33 @@ export class TileManager {
     #buildQueue = [];
     #buildTimer = null;
 
-    /** @type {THREE.Mesh|null} */
+    /** Unit plane shared by the ground meshes (background, depth, shadows). */
+    #planeGeometry = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+
+    /** @type {THREE.Mesh|null} Background colour plane. */
     #groundMesh = null;
+
+    /** @type {THREE.Mesh|null} Invisible plane writing the depth of the ground ({@link MapConfig#occludeBelowGround}). */
+    #groundDepthMesh = null;
+
+    /** Material of {@link #groundDepthMesh}: depth only, pushed slightly back so the map layers lying on it always pass. */
+    #groundDepthMaterial = new THREE.MeshBasicMaterial({
+        colorWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+    });
+
+    /** @type {THREE.Mesh|null} Ground shadows ({@link MapStyle#shadowLayer}). */
+    #shadowMesh = null;
+
+    /** Whether the renderer draws shadow maps (the shadow plane is useless otherwise). */
+    #shadowsEnabled = false;
+
+    /** `vertexColors` of the building material the loaded buildings were built for. */
+    #buildingVertexColors;
 
     /** @type {MeshBatches} */
     #batches;
 
-    #pending = { reset: true, origin: true, placement: true, needed: true, borders: false, restyle: false };
+    #pending = { reset: true, origin: true, placement: true, needed: true, borders: false, restyle: false, ground: false };
     #warnedStatuses = new Set();
     #destroyed = false;
 
@@ -119,6 +148,8 @@ export class TileManager {
         this.#root    = root;
         this.#notify  = notify;
         this.#batches = new MeshBatches(root);
+        this.#buildingVertexColors = !!mapConfig.mapStyle.buildingLayer.material?.vertexColors;
+        this.#groundDepthMaterial.name = 'ThreeGeoPlayGroundDepth';
     }
 
     // ─── Requests (applied by update) ─────────────────────────────────────────
@@ -163,6 +194,16 @@ export class TileManager {
         if (fields.has('renderDistance') || fields.has('tileLayout'))        p.needed = true;
         if (fields.has('showTileBorders'))                                   p.borders = true;
         if (fields.has('mapStyle') || fields.has('tileSchema'))              p.restyle = true;
+        if (fields.has('occludeBelowGround'))                                p.ground = true;
+    }
+
+    /**
+     * Whether the renderer draws shadow maps: the ground shadow plane is only drawn then.
+     * @param {boolean} enabled
+     */
+    setShadowsEnabled(enabled) {
+        this.#shadowsEnabled = !!enabled;
+        if (this.#shadowMesh) this.#shadowMesh.visible = this.#shadowsEnabled;
     }
 
     /**
@@ -237,15 +278,22 @@ export class TileManager {
             }
         }
 
+        // Buildings carry colours only for `vertexColors` materials: rebuild them when the flag changes.
+        const vertexColors = !!cfg.mapStyle.buildingLayer.material?.vertexColors;
+        if (vertexColors !== this.#buildingVertexColors) {
+            this.#buildingVertexColors = vertexColors;
+            p.restyle = true;
+        }
+
         if (p.restyle) {
             for (const record of this.#tiles.values()) {
                 if (record.state === State.READY) this.#enqueueBuild(record);
             }
         }
 
-        if (p.restyle || p.placement || p.needed || centerMoved) this.#syncGround(p.restyle);
+        if (p.restyle || p.placement || p.needed || p.ground || centerMoved) this.#syncGround();
 
-        p.reset = p.origin = p.placement = p.needed = p.borders = p.restyle = false;
+        p.reset = p.origin = p.placement = p.needed = p.borders = p.restyle = p.ground = false;
     }
 
     /**
@@ -265,11 +313,10 @@ export class TileManager {
             clearTimeout(this.#buildTimer);
             this.#buildTimer = null;
         }
-        if (this.#groundMesh) {
-            this.#groundMesh.removeFromParent();
-            this.#groundMesh.geometry.dispose();
-            this.#groundMesh = null;
-        }
+        for (const mesh of [this.#groundMesh, this.#groundDepthMesh, this.#shadowMesh]) mesh?.removeFromParent();
+        this.#groundMesh = this.#groundDepthMesh = this.#shadowMesh = null;
+        this.#planeGeometry.dispose();
+        this.#groundDepthMaterial.dispose();
         this.#batches.dispose();
     }
 
@@ -555,48 +602,82 @@ export class TileManager {
 
     // ─── Ground ───────────────────────────────────────────────────────────────
 
-    /** Creates, updates or removes the background plane under the loaded tiles. */
-    #syncGround(styleChanged) {
-        const cfg   = this.#config;
-        const style = cfg.mapStyle.getStyleLayerByName('background');
+    /**
+     * Creates, updates or removes the planes covering the loaded area:
+     *  - the background colour ({@link MapStyle#backgroundLayer}), a flat layer;
+     *  - the ground depth ({@link MapConfig#occludeBelowGround}): an invisible
+     *    plane drawn first, so buildings and scene objects are depth tested
+     *    against the ground — what is below it is hidden, what stands on it is not;
+     *  - the ground shadows ({@link MapStyle#shadowLayer}), over the flat layers.
+     */
+    #syncGround() {
+        const cfg        = this.#config;
+        const style      = cfg.mapStyle;
+        const background = style.backgroundLayer;
+        const shadow     = style.shadowLayer;
 
-        if (!style?.isVisible || !style.material) {
-            if (this.#groundMesh) {
-                this.#groundMesh.removeFromParent();
-                this.#groundMesh.geometry.dispose();
-                this.#groundMesh = null;
-            }
-            return;
+        const showBackground = !!(background?.isVisible && background.material);
+        const showShadow     = !!(shadow?.isVisible && shadow.material);
+        const groundY        = Math.min(0, showBackground ? background.Y : 0);
+
+        this.#groundMesh = this.#syncPlane(this.#groundMesh, showBackground, 'ThreeGeoPlayGround', mesh => {
+            mesh.material      = background.material;
+            mesh.renderOrder   = background.renderingOrder;
+            mesh.receiveShadow = background.receiveShadow;
+            mesh.castShadow    = background.castShadow;
+            return background.Y;
+        });
+
+        this.#groundDepthMesh = this.#syncPlane(this.#groundDepthMesh, cfg.occludeBelowGround, 'ThreeGeoPlayGroundDepth', mesh => {
+            mesh.material    = this.#groundDepthMaterial;
+            mesh.renderOrder = GROUND_DEPTH_RENDER_ORDER;
+            mesh.raycast     = noRaycast;   // not a visible surface: raycasts hit the background instead
+            return groundY;
+        }, false);
+
+        this.#shadowMesh = this.#syncPlane(this.#shadowMesh, showShadow, 'ThreeGeoPlayShadow', mesh => {
+            mesh.raycast       = noRaycast;
+            mesh.material      = shadow.material;
+            mesh.renderOrder   = shadow.renderingOrder;
+            mesh.receiveShadow = shadow.receiveShadow;
+            mesh.visible       = this.#shadowsEnabled;
+            return shadow.Y;
+        });
+    }
+
+    /**
+     * Keeps one ground plane in sync with the loaded area.
+     * @param {THREE.Mesh|null} mesh - Current plane, if any.
+     * @param {boolean} show
+     * @param {string} name
+     * @param {(mesh: THREE.Mesh) => number} configure - Applies material & co., returns the plane height.
+     * @param {boolean} [flatLayer=true] - Drawn as a flat map layer (stacked by render order, no depth writes).
+     * @returns {THREE.Mesh|null}
+     */
+    #syncPlane(mesh, show, name, configure, flatLayer = true) {
+        if (!show) {
+            mesh?.removeFromParent();
+            return null;
+        }
+        if (!mesh) {
+            mesh = new THREE.Mesh(this.#planeGeometry);
+            mesh.name             = name;
+            mesh.matrixAutoUpdate = false;
+            if (flatLayer) drawWithoutDepthWrite(mesh);
+            this.#root.add(mesh);
         }
 
-        if (!this.#groundMesh) {
-            const geometry = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
-            this.#groundMesh = new THREE.Mesh(geometry, style.material);
-            this.#groundMesh.name = 'ThreeGeoPlayGround';
-            this.#groundMesh.matrixAutoUpdate = false;
-            this.#root.add(this.#groundMesh);
-            styleChanged = true;
-        }
-
-        const ground = this.#groundMesh;
-        if (styleChanged) {
-            ground.material = style.material;
-            const order = style.renderingOrder;
-            if (order !== undefined && order !== null) {
-                ground.material.depthTest = false;
-                ground.renderOrder        = order;
-            }
-        }
-
+        const cfg    = this.#config;
         const size   = cfg.tileWorldSize;
         const offset = cfg.worldOriginOffset;
         const extent = (cfg.renderDistance * 2 + 1) * size;
-        ground.position.set(
+        mesh.position.set(
             (this.#centerTX - this.#originFX + 0.5) * size + offset.x,
-            style.Y ?? 0,
+            configure(mesh) ?? 0,
             (this.#centerTY - this.#originFY + 0.5) * size + offset.z,
         );
-        ground.scale.set(extent, 1, extent);
-        ground.updateMatrix();
+        mesh.scale.set(extent, 1, extent);
+        mesh.updateMatrix();
+        return mesh;
     }
 }

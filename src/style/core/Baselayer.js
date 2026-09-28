@@ -102,4 +102,11 @@ export class BaseLayer {
      * @param {boolean} v
      */
     setVisibleAll(v) { this._allTypes().forEach(t => t.setVisible(v)); }
+
+    /**
+     * Sets `receiveShadow` on every registered feature type
+     * (useful with lit materials; see {@link BaseFeatureType#receiveShadow}).
+     * @param {boolean} v
+     */
+    setReceiveShadowAll(v) { this._allTypes().forEach(t => { t.receiveShadow = v; }); }
 }

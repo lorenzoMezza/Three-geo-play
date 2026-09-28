@@ -11,7 +11,9 @@ ThreeGeoPlay is a JavaScript library that fetches [Vector Tiles (MVT/PBF)](https
 ## Features
 
 - 🗺️ **Vector tile rendering** — roads, buildings, waterways, land use, and more
-- 🏙️ **3D building extrusion** — true-scale heights from OSM data
+- 🏙️ **3D building extrusion** — true-scale heights from OSM data, solid volumes with baked wall shading and ambient occlusion
+- ☀️ **Shadows** — buildings cast and receive real-time shadows, on the map and on your own objects
+- 🧩 **Plays well with your scene** — map materials are never modified, the ground hides what is below it, buildings are ordinary depth-tested meshes
 - 🎨 **Fully styleable** — swap materials, colors, and visibility per layer, live
 - 🔌 **Any vector tile provider** — OpenMapTiles (MapTiler, OpenFreeMap), MapLibre styles, Mapbox, or your own schema
 - 📡 **Auto tile loading** — nearest-first queue with concurrency, abort, timeouts, and retry with backoff
@@ -83,13 +85,15 @@ style.landUseLayer.residential.material = new THREE.MeshBasicMaterial({ color: 0
 style.landUseLayer.industrial.isVisible = false;
 
 // Buildings 3D (single-type layer: set properties on the layer itself)
-style.buildingLayer.material  = new THREE.MeshStandardMaterial({ color: 0xaaaaaa }); // lit materials get normals automatically
+style.buildingLayer.material  = new THREE.MeshStandardMaterial({ color: 0xeeeeee, vertexColors: true }); // lit materials get normals automatically
 style.buildingLayer.isVisible = true;  // false to hide all buildings
 style.buildingLayer.height    = 1;     // vertical exaggeration: 1 = true scale
 ```
 
-Each type exposes `material`, `isVisible`, `Y` (height of the layer) and `renderingOrder`; line types (roads, waterways) also have `outlineMaterial`, `lineWidth`, `outlineWidth` and `jointSegments`.
+Each type exposes `material`, `isVisible`, `Y` (height of the layer), `renderingOrder`, `castShadow` and `receiveShadow`; line types (roads, waterways) also have `outlineMaterial`, `lineWidth`, `outlineWidth` and `jointSegments`.
 A layer's `isVisible` is a master switch that keeps per-type settings; use `setVisibleAll(v)` to change every type at once.
+
+Materials are used exactly as you configure them: ThreeGeoPlay never changes their settings, so you can share them with your own objects.
 
 ### How lines are layered
 
@@ -101,7 +105,52 @@ Roads and waterways are stacked like on a printed map, inside the `renderingOrde
 
 Lower a type's `renderingOrder` by 1 to put it entirely below the others.
 
-> Map geometry faces up (+Y), so the default `THREE.FrontSide` materials work. Flat layers are stacked with `renderingOrder`: ThreeGeoPlay sets `depthTest = false` on their materials, so do not share those material instances with your own scene objects.
+> Map geometry faces up (+Y), so the default `THREE.FrontSide` materials work. Flat layers lie on the same plane, so they are stacked by `renderingOrder` and drawn without writing depth (only during their own draw — the material is not modified). They are still depth tested: buildings and your objects in front of them always hide them. Three.js draws transparent materials after opaque ones, so a transparent flat layer ends up above every opaque one whatever its `renderingOrder`.
+
+### Buildings
+
+Buildings are solid, depth-tested meshes. The default material is an opaque, unlit `MeshBasicMaterial` that still reads as 3D: every vertex carries a colour baked by the library, used by materials created with `vertexColors: true` (multiplied by `material.color`):
+
+```js
+const buildings = style.buildingLayer;
+buildings.wallShading      = 0.6;      // walls facing away from a south-west sun get darker (unlit materials only)
+buildings.ambientOcclusion = 0.45;     // walls darken towards the ground
+buildings.roofColor        = 0xf6ebe2; // roof tint (the getter returns a copy: assign to change it)
+buildings.colorVariation   = 0.08;     // slight tone change from roof to roof
+```
+
+With a lit material (`MeshLambertMaterial`, `MeshStandardMaterial`, …) your lights shade the walls and the baked colour adds the ambient occlusion and the roof tones. Wall colours depend only on the wall direction and height, so where OSM buildings overlap their shared walls get the same colour and cannot flicker.
+
+**Transparent buildings.** With `transparent: true` and `opacity < 1`, only the surface nearest to the camera is blended: the buildings' depth is drawn first (`buildings.depthPrepass`, on by default), so walls behind and between buildings stay hidden and objects behind them show through a single layer of "glass". Set `depthPrepass = false` for plain Three.js blending of every face.
+
+### Your objects and the map
+
+The map behaves like a solid floor with solid buildings, so objects you add to the scene need no special settings:
+
+- **Buildings** are ordinary depth-tested meshes: they hide your objects and are hidden by them.
+- **The ground hides what is below it** — an invisible plane writes the ground depth before anything else is drawn (`MapConfig.occludeBelowGround`, default `true`; set it to `false` to see through the ground, e.g. with your own terrain).
+- **Flat layers never cover your objects**, even when their materials are transparent.
+- **Nothing you pass in is modified**, so materials can be shared with your own meshes.
+
+### Shadows
+
+Buildings cast and receive shadows (`castShadow` / `receiveShadow`, both `true` by default). Enable shadow maps and give a light `castShadow`:
+
+```js
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type    = THREE.PCFShadowMap;
+
+const sun = new THREE.DirectionalLight(0xffffff, 2.5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+// Cover the area you look at with the shadow camera (and move it with the view):
+Object.assign(sun.shadow.camera, { left: -200, right: 200, top: 200, bottom: -200, near: 1, far: 2000 });
+scene.add(sun, sun.target);
+
+style.buildingLayer.material = new THREE.MeshLambertMaterial({ color: 0xf1ebe0, vertexColors: true });
+```
+
+The flat map layers use unlit materials, which cannot show shadows: `style.shadowLayer` lays a transparent `THREE.ShadowMaterial` plane over them that only darkens where a shadow falls (drawn while `renderer.shadowMap.enabled` is true; `style.shadowLayer.material.opacity` sets the strength). If you give the flat layers lit materials instead, use `layer.setReceiveShadowAll(true)` and hide the shadow layer. Your own meshes cast shadows on the map and the buildings like on any other surface.
 
 ---
 
@@ -151,6 +200,7 @@ Set them in the constructor options, with `config.set({ … })`, or one by one o
 | `viewMode` | `ViewMode.FOLLOW_TARGET` or `ViewMode.MANUAL` | `FOLLOW_TARGET` |
 | `followUpdateInterval` | Minimum ms between follow updates (`0` = every frame) | `0` |
 | `showTileBorders` | Debug tile boundaries | `false` |
+| `occludeBelowGround` | The map ground hides what is below it | `true` |
 
 Invalid values and unknown option names throw an `Error`. `originLatLon` and `worldOriginOffset` are frozen objects: assign a new object to change them. (`pbfTileProviderZXYurl` still works as a deprecated alias of `tileUrl`.)
 
@@ -167,6 +217,7 @@ Invalid values and unknown option names throw an `Error`. `originLatLon` and `wo
 | `landuse` | residential, industrial, school, hospital… |
 | `landcover` | wood, grass, sand… and their subclasses (park, forest, beach, golf_course…) |
 | `background` | ground plane |
+| `shadow` | ground shadows (a `ShadowMaterial` plane over the flat layers) |
 
 ---
 
