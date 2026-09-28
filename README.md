@@ -378,6 +378,20 @@ config.tileSchema = (sourceLayer, props) => {
 
 ---
 
+## Playground
+
+`playground/` runs the library straight from `src` for quick tries and debugging — edits reload at once:
+
+```bash
+cd playground
+npm install
+npm run dev
+```
+
+It opens Rome from OpenFreeMap, one unit per metre. URL parameters: `?lat=41.89&lon=12.49`, `?zoom=14`, `?tiles=<template, TileJSON or style URL>`, `?token=<Mapbox token>`. Keys: **B** tile borders, **N** day / night style, **G** glass buildings, **S** shadows; a click logs the feature under the pointer. `geo`, `style`, `config`, `scene`, `camera` and `THREE` are available in the browser console.
+
+---
+
 ## License
 
 MIT
