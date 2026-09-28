@@ -10,6 +10,22 @@
   <body>
     <div id="viewport"></div>
 
+    <nav id="modes" aria-label="Scenes">
+      <button type="button" data-mode="explore" aria-pressed="true">Explore</button>
+      <button type="button" data-mode="walk" aria-pressed="false">Walk</button>
+      <button type="button" data-mode="fly" aria-pressed="false">Fly</button>
+    </nav>
+
+    <section id="hud" hidden>
+      <h2 id="hud-title"></h2>
+      <p id="hud-stats"></p>
+      <ul id="hud-help"></ul>
+    </section>
+    <div id="hud-arrow" hidden aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="40" height="40"><path d="M20 3 L33 33 L20 26 L7 33 Z" fill="currentColor"/></svg>
+    </div>
+    <p id="hud-message" aria-live="polite"></p>
+
     <div id="readout" aria-live="polite">
       <div id="readout-position">—</div>
       <div id="readout-stats"></div>

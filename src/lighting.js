@@ -23,6 +23,9 @@ export class Lighting {
     /** Height of the sun above the horizon, in degrees. */
     elevation = 40
 
+    /** Half size of the area with shadows, in world units; `null` follows the camera distance. */
+    shadowArea = null
+
     sky = new THREE.HemisphereLight(0xe4ecff, 0x9a9282, 1.6)
     sun = new THREE.DirectionalLight(0xfff2df, 2.4)
 
@@ -65,7 +68,8 @@ export class Lighting {
 
         // Shadow area: about the visible ground, in steps of √2 so its texel size rarely changes.
         const distance = this.#camera.position.distanceTo(target)
-        const half     = 2 ** (Math.ceil(Math.log2(THREE.MathUtils.clamp(distance * 1.2, 20, 1500)) * 2) / 2)
+        const area     = this.shadowArea ?? THREE.MathUtils.clamp(distance * 1.2, 20, 1500)
+        const half     = 2 ** (Math.ceil(Math.log2(area) * 2) / 2)
         const texel    = (2 * half) / shadow.mapSize.x
 
         const azimuth   = THREE.MathUtils.degToRad(this.azimuth)

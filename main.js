@@ -8,6 +8,11 @@ import { Lighting } from './src/lighting.js'
 import { applyDayTheme } from './src/themes.js'
 import { installInspector } from './src/inspector.js'
 import { buildPanel } from './src/panel.js'
+import { Keys } from './src/game/input.js'
+import { Hud } from './src/game/hud.js'
+import { CityCollider } from './src/game/collider.js'
+import { createWalkMode } from './src/game/walk.js'
+import { createFlyMode } from './src/game/fly.js'
 import './style.css'
 
 // Must run before any material is compiled.
@@ -72,17 +77,28 @@ const source = {
 //   camera — around the camera position (default, like a game)
 //   view   — around the point the camera looks at
 //   manual — fixed until "Load tiles around the view" is pressed
+//   object — around an object of a game (the runner, the plane)
 const focus = new THREE.Object3D()   // follows the orbit target, used by the "view" mode
 
 const loading = {
     mode: 'camera',
     manualCenter: new THREE.Vector3(),
+    object: null,
 
     /** World position the tiles are currently loaded around. */
     center() {
         if (this.mode === 'camera') return camera.position
         if (this.mode === 'view')   return controls.target
+        if (this.mode === 'object') return this.object.position
         return this.manualCenter
+    },
+
+    /** Loads the tiles around an object of a game. */
+    follow(object) {
+        this.mode   = 'object'
+        this.object = object
+        config.viewMode = ViewMode.FOLLOW_TARGET
+        geo.setFollowTarget(object)
     },
 
     setMode(mode) {
@@ -131,7 +147,7 @@ openPanel.addEventListener('click', () => setPanelOpen(true))
 setPanelOpen(window.innerWidth > 640)
 
 // Click on the map to see what is there.
-installInspector({ geo, camera, renderer, scene, output: document.getElementById('readout-pick') })
+const inspector = installInspector({ geo, camera, renderer, scene, output: document.getElementById('readout-pick') })
 
 // The controls hint goes away after the first interaction (or a few seconds).
 const controlsHint = document.getElementById('controls-hint')
@@ -188,8 +204,101 @@ function updateAttribution() {
     }))
 }
 
+// ─── Scenes: explore, walk, fly ─────────────────────────────────────────────
+// The games use the same map and scene. They set the map so that one world
+// unit is one metre, around their own follow target; `controls.target` stays
+// the point of interest (lighting, fog and read-out follow it).
+const keys     = new Keys()
+const hud      = new Hud()
+const collider = new CityCollider(geo)
+const tileMetres = lat => 40075016.686 * Math.cos(lat * Math.PI / 180) / 2 ** SOURCES.local.zoomLevel
+
+const game = {
+    geo, scene, camera, renderer, lighting, keys, hud, collider,
+    focus: controls.target,
+
+    /** Sets the map up for a game: metres, tiles around `follow`, a low sun. */
+    startGame({ spawn, renderDistance, follow, sun }) {
+        if (source.name !== 'local') source.set('local')
+        config.set({
+            originLatLon: spawn, worldOriginOffset: { x: 0, z: 0 },
+            tileWorldSize: tileMetres(spawn.lat), renderDistance,
+        })
+        loading.follow(follow)
+        geo.onFrameUpdate()   // apply the new scale now, so the tiles are placed before the game reads them
+        Object.assign(lighting, sun)
+        collider.start()
+        keys.clear()
+        keys.enabled = true
+    },
+
+    endGame() {
+        collider.stop()
+        keys.enabled = false
+        lighting.shadowArea = null
+    },
+}
+
+/** The explorer: orbit controls and the settings panel. Its view is kept while a game runs. */
+const explore = {
+    saved: null,
+    enter() {
+        const s = this.saved
+        if (s) {
+            config.set({ originLatLon: s.origin, worldOriginOffset: s.offset, tileWorldSize: s.tileWorldSize, renderDistance: s.renderDistance })
+            Object.assign(lighting, s.sun)
+            camera.fov = 60
+            camera.updateProjectionMatrix()
+            camera.position.copy(s.camera)
+            controls.target.copy(s.target)
+            loading.setMode(s.mode === 'manual' ? 'camera' : s.mode)
+            if (s.mode === 'manual') loading.loadAround(s.manualCenter.x, s.manualCenter.z)
+        }
+        controls.enabled  = true
+        inspector.enabled = true
+        setPanelOpen(window.innerWidth > 640)
+        hud.hide()
+    },
+    exit() {
+        this.saved = {
+            origin: config.originLatLon, offset: config.worldOriginOffset,
+            tileWorldSize: config.tileWorldSize, renderDistance: config.renderDistance,
+            sun: { azimuth: lighting.azimuth, elevation: lighting.elevation },
+            camera: camera.position.clone(), target: controls.target.clone(),
+            mode: loading.mode, manualCenter: loading.manualCenter.clone(),
+        }
+        controls.enabled  = false
+        inspector.enabled = false
+        panel.hidden      = true
+        openPanel.hidden  = true
+        document.getElementById('readout-pick').textContent = ''
+        scene.getObjectByName('Pin').visible = false
+    },
+    update() {
+        controls.update()
+    },
+}
+
+const modes = { explore, walk: createWalkMode(game), fly: createFlyMode(game) }
+let mode = explore
+const modeButtons = [...document.querySelectorAll('#modes button')]
+
+function setMode(name) {
+    if (modes[name] === mode) return
+    mode.exit()
+    mode = modes[name]
+    mode.enter()
+    for (const button of modeButtons) button.setAttribute('aria-pressed', String(button.dataset.mode === name))
+    controlsHint.classList.add('gone')
+}
+for (const button of modeButtons) button.addEventListener('click', () => { setMode(button.dataset.mode); button.blur() })
+
 // Debug handle for the browser console during development (`demo.geo`, `demo.camera`, …).
-if (import.meta.env.DEV) window.demo = { THREE, geo, camera, controls, scene, renderer, focus, atmosphere, lighting, loading, source }
+if (import.meta.env.DEV) {
+    window.demo = { THREE, geo, camera, controls, scene, renderer, focus, atmosphere, lighting, loading, source, setMode, collider, keys }
+    /** Runs one frame by hand (the loop stops while the tab is hidden). */
+    window.demo.step = (dt = 1 / 60) => { mode.update(dt); geo.onFrameUpdate(); atmosphere.update(dt); lighting.update(); renderer.render(scene, camera) }
+}
 
 // ─── Loop ───────────────────────────────────────────────────────────────────
 const timer = new THREE.Timer()
@@ -197,7 +306,7 @@ renderer.setAnimationLoop(time => {
     timer.update(time)
     const dt = Math.min(timer.getDelta(), 0.1)
     if (dt > 0) fps += (1 / dt - fps) * 0.05
-    controls.update()
+    mode.update(dt)
     focus.position.copy(controls.target)
     geo.onFrameUpdate()
     atmosphere.update(dt)

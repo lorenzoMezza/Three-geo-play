@@ -35,6 +35,86 @@ a:hover { text-decoration-color: currentColor; }
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* ── Scenes and game HUD ────────────────────────────────────────────────── */
+
+#modes {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    z-index: 5;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    transform: translateX(-50%);
+    background: rgba(251, 250, 246, 0.92);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    box-shadow: 0 2px 10px rgba(38, 36, 32, 0.12);
+}
+#modes button {
+    padding: 6px 16px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-2);
+    font: 600 13px var(--sans);
+    cursor: pointer;
+}
+#modes button:hover { color: var(--ink); }
+#modes button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+
+#hud {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 4;
+    max-width: min(340px, calc(100vw - 24px));
+    padding: 10px 12px;
+    background: rgba(251, 250, 246, 0.9);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    pointer-events: none;
+}
+#hud h2 { margin: 0; font: 600 15px var(--serif); }
+#hud-stats { margin: 4px 0 6px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+#hud-stats:empty { display: none; }
+#hud-help { margin: 0; padding: 0; list-style: none; color: var(--ink-2); font-size: 12px; }
+
+#hud-arrow {
+    position: fixed;
+    top: 64px;
+    left: 50%;
+    z-index: 4;
+    width: 40px;
+    height: 40px;
+    margin-left: -20px;
+    color: #ff8a1f;
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45));
+    pointer-events: none;
+}
+
+#hud-message {
+    position: fixed;
+    top: 32%;
+    left: 50%;
+    z-index: 4;
+    margin: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+    color: #fff;
+    font: 700 clamp(20px, 3.4vw, 34px) var(--serif);
+    text-align: center;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.55);
+    opacity: 0;
+    transition: opacity 0.35s, transform 0.35s;
+    pointer-events: none;
+}
+#hud-message.shown { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+@media (max-width: 640px) {
+    #modes { top: auto; bottom: 60px; }
+    #hud-help { display: none; }
+}
+
 /* ── Readout, hint, attribution ─────────────────────────────────────────── */
 
 #readout {

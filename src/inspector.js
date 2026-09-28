@@ -16,6 +16,7 @@ const LAYER_NAMES = {
  *
  * @param {{ geo: import('lm-three-geo-play').ThreeGeoPlay, camera: THREE.Camera,
  *           renderer: THREE.WebGLRenderer, scene: THREE.Scene, output: HTMLElement }} options
+ * @returns {{ enabled: boolean }} Set `enabled` to false to ignore clicks (e.g. during a game).
  */
 export function installInspector({ geo, camera, renderer, scene, output }) {
     const raycaster = new THREE.Raycaster()
@@ -24,12 +25,13 @@ export function installInspector({ geo, camera, renderer, scene, output }) {
     pin.visible = false
     scene.add(pin)
 
+    const inspector = { enabled: true }
     const canvas = renderer.domElement
     let down = null
     canvas.addEventListener('pointerdown', event => { down = { x: event.clientX, y: event.clientY } })
     canvas.addEventListener('pointerup', event => {
         // A click, not the end of a drag.
-        if (!down || Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) return
+        if (!inspector.enabled || !down || Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) return
         down = null
 
         const rect = canvas.getBoundingClientRect()
@@ -44,6 +46,7 @@ export function installInspector({ geo, camera, renderer, scene, output }) {
         output.textContent = feature ? describe(feature) : ''
         if (feature) pin.position.copy(feature.intersection.point)
     })
+    return inspector
 }
 
 function describe({ layer, type, properties }) {

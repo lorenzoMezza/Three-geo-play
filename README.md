@@ -4,7 +4,28 @@ Live demo of [ThreeGeoPlay](https://github.com/lorenzoMezza/Three-geo-play): Ope
 
 🔴 **Live:** https://lorenzomezza.github.io/Three-geo-play-demo-website/
 
-## What it shows
+## Three scenes
+
+Switch with the bar at the top of the page.
+
+- **Explore** — the map explorer and its settings panel (below).
+- **Walk** — a runner in Piazza San Pietro. Run through Rome, hold Space for a super jump onto the roofs,
+  collect the coins on the streets and roofs, press E to paint the building in front of you.
+- **Fly** — a propeller plane over the city: a grand tour through glowing rings above the landmarks,
+  with contrails, the plane's shadow on the roofs and crashes into the buildings.
+
+The models are built from simple shapes (`src/game/models.js`). The games use the library the way your own
+game would (`src/game/`):
+
+- the runner and the plane are the follow target, so the tiles load around them;
+- walls, roofs and crashes come from the building footprints of the tiles (`getFeatures('building')`,
+  kept current with the `tileload` / `tileunload` events);
+- coins are placed from the street and building data and added to the tiles' own groups, so they follow
+  the map and disappear with their tile;
+- painting uses `pickFeature()` and `featureStyle`; the rings are placed with `latLonToWorld()`;
+- everything you add casts shadows on the city and hides behind the buildings like any Three.js object.
+
+## What the explorer shows
 
 - Tiles loaded around the camera (follow mode, the default), around the point you look at, or manually
 - Solid 3D buildings with baked ambient occlusion and wall shading, lit by a sun you can move
