@@ -1,10 +1,27 @@
 # 🌍 ThreeGeoPlay
 
-**Real-world map tiles rendered in 3D — powered by Three.js and OpenStreetMap vector data.**
+**Real-world maps in Three.js — OpenStreetMap vector tiles rendered as 3D geometry, ready for games and apps.**
 
-🔴 [Live Demo](https://lorenzomezza.github.io/Three-geo-play-demo-website/)
+[![npm](https://img.shields.io/npm/v/lm-three-geo-play?color=cb3837&logo=npm)](https://www.npmjs.com/package/lm-three-geo-play)
+[![license](https://img.shields.io/npm/l/lm-three-geo-play)](https://github.com/lorenzoMezza/Three-geo-play/blob/main/LICENSE)
+[![types](https://img.shields.io/npm/types/lm-three-geo-play)](https://github.com/lorenzoMezza/Three-geo-play/blob/main/API.md)
 
-ThreeGeoPlay is a JavaScript library that fetches [Vector Tiles (MVT/PBF)](https://docs.mapbox.com/vector-tiles/specification/) and renders them as 3D geometry directly into your Three.js scene. Roads, buildings, water, land use — all as real meshes you can walk through, fly over, or build games on top of.
+🔴 [**Live demo**](https://lorenzomezza.github.io/Three-geo-play-demo-website/) · 📘 [**API reference**](https://github.com/lorenzoMezza/Three-geo-play/blob/main/API.md) · 🧪 [Playground](#playground)
+
+![St. Peter's Square in ThreeGeoPlay: extruded buildings, roads and land use with real-time shadows](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/hero.jpg)
+
+ThreeGeoPlay fetches [vector tiles (MVT / PBF)](https://docs.mapbox.com/vector-tiles/specification/) and renders them as meshes directly in your Three.js scene. Roads, buildings, water and land use become real geometry you can walk through, fly over, collide with and build games on top of — with your materials, your lights and your objects.
+
+| | |
+|---|---|
+| ![Colosseum casting real-time shadows](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/shadows.jpg) | ![Night style made with MapStyle.dark()](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/night.jpg) |
+| **Shadows** — buildings cast and receive them, on the map and on your objects | **Themes** — `MapStyle.dark()`, or any material per layer |
+| ![Glass buildings blended as a single layer](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/glass.jpg) | ![Buildings coloured and raised from their OSM height with featureStyle](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/data-driven.jpg) |
+| **Glass** — transparent buildings without inner walls or flicker | **Data-driven** — colour, raise or hide single features with `featureStyle` |
+| ![Third-person runner on the colonnade of St. Peter's Square](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/walk.jpg) | ![Plane flying through rings over the Vatican](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/fly.jpg) |
+| **Walk** — `getHeightAt()` for collisions and roofs, `pickFeature()` to paint buildings | **Fly** — follow mode streams the city under a plane |
+
+<sub>Screenshots from the [demo](https://lorenzomezza.github.io/Three-geo-play-demo-website/) (Explore, Walk and Fly scenes). Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, © [OpenMapTiles](https://openmaptiles.org/).</sub>
 
 ---
 
@@ -33,7 +50,15 @@ ThreeGeoPlay is a JavaScript library that fetches [Vector Tiles (MVT/PBF)](https
 npm i lm-three-geo-play three
 ```
 
-Three.js is a peer dependency: the library uses your copy (so your materials and objects mix freely with the map) and never bundles its own. The package is ES modules only and ships its TypeScript types.
+Three.js is a peer dependency: the library uses your copy (so your materials and objects mix freely with the map) and never bundles its own.
+
+| | |
+|---|---|
+| Module formats | ES module and CommonJS, picked automatically (`import` / `require`) |
+| TypeScript | types included, for `bundler`, `node16` and `nodenext` resolution |
+| Three.js | r150 or newer; **r170+ recommended** (batched drawing: one draw call per material) |
+| Renderer | `THREE.WebGLRenderer` — create it with `{ stencil: true }` for transparent buildings |
+| Dependencies | none besides Three.js |
 
 ---
 
@@ -74,7 +99,7 @@ animate();
 
 ## Styling
 
-Access the style with `geo.getMapStyle()` (same object as `getMapConfig().mapStyle`) and modify each layer type directly. Changes are applied to the tiles already on screen on the next `onFrameUpdate()` — no reload needed:
+Every option, property and method is described in the [API reference](https://github.com/lorenzoMezza/Three-geo-play/blob/main/API.md). Access the style with `geo.getMapStyle()` (same object as `getMapConfig().mapStyle`) and modify each layer type directly. Changes are applied to the tiles already on screen on the next `onFrameUpdate()` — no reload needed:
 
 ```js
 import * as THREE from 'three';
@@ -392,6 +417,12 @@ It opens Rome from OpenFreeMap, one unit per metre. URL parameters: `?lat=41.89&
 
 ---
 
+## API reference
+
+The complete reference — every class, property, default value, event and type — is in [API.md](https://github.com/lorenzoMezza/Three-geo-play/blob/main/API.md).
+
+---
+
 ## License
 
-MIT
+[MIT](https://github.com/lorenzoMezza/Three-geo-play/blob/main/LICENSE) © Lorenzo Mezzabarba. Map data from OpenStreetMap is © OpenStreetMap contributors (ODbL): display the attribution your tile provider requires (`geo.getTileSource().attribution`).
