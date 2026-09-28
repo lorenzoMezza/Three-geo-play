@@ -1,6 +1,6 @@
 {
   "name": "lm-three-geo-play",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Real-world maps in Three.js: OpenStreetMap vector tiles rendered as 3D geometry — roads, water, land use and extruded buildings — ready for games and apps.",
   "type": "module",
   "main": "./dist/three-geo-play.cjs",
@@ -22,6 +22,7 @@
   "files": [
     "dist",
     "API.md",
+    "docs/GUIDE.md",
     "README.md",
     "LICENSE"
   ],
