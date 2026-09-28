@@ -50,6 +50,8 @@ a:hover { text-decoration-color: currentColor; }
 }
 #readout-position { font-weight: 600; }
 #readout-stats { margin-top: 1px; color: var(--ink-3); font-size: 11.5px; }
+#readout-pick { margin-top: 3px; color: var(--accent); font-size: 12px; font-weight: 600; }
+#readout-pick:empty { display: none; }
 
 #controls-hint {
     position: fixed;

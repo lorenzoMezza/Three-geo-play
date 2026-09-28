@@ -6,6 +6,7 @@ import { SOURCES, PLACES, isInsideTileset } from './src/tileset.js'
 import { Atmosphere, installRadialFog } from './src/atmosphere.js'
 import { Lighting } from './src/lighting.js'
 import { applyDayTheme } from './src/themes.js'
+import { installInspector } from './src/inspector.js'
 import { buildPanel } from './src/panel.js'
 import './style.css'
 
@@ -128,6 +129,9 @@ function setPanelOpen(open) {
 document.getElementById('panel-close').addEventListener('click', () => setPanelOpen(false))
 openPanel.addEventListener('click', () => setPanelOpen(true))
 setPanelOpen(window.innerWidth > 640)
+
+// Click on the map to see what is there.
+installInspector({ geo, camera, renderer, scene, output: document.getElementById('readout-pick') })
 
 // The controls hint goes away after the first interaction (or a few seconds).
 const controlsHint = document.getElementById('controls-hint')

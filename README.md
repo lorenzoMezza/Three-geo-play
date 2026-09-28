@@ -10,6 +10,7 @@ Live demo of [ThreeGeoPlay](https://github.com/lorenzoMezza/Three-geo-play): Ope
 - Solid 3D buildings with baked ambient occlusion and wall shading, lit by a sun you can move
 - Real-time shadows: buildings shade the map and each other (the style's shadow layer draws them on the unlit map)
 - Transparent buildings drawn as a single layer of "glass" — no inner walls
+- Click on the map to see what is there (building height, road type, land use…): `pickFeature()` of the library, with a pin that casts its shadow like any object of your scene
 - Live restyling of every layer: colours, visibility, outlines, building height, opacity, roof tint, sun or baked shading
 - Themes (default / night) applied to the tiles already on screen
 - Jumping to real places, geographic coordinates of the view
