@@ -26,6 +26,12 @@ export class BaseFeatureType {
     /** @type {number} */
     #renderingOrder = -1;
 
+    /** @type {boolean} */
+    #castShadow = false;
+
+    /** @type {boolean} */
+    #receiveShadow = false;
+
     /** @type {number} */
     #stamp = 0;
 
@@ -114,8 +120,10 @@ export class BaseFeatureType {
     /**
      * Three.js render order for this feature type. Values below 0 are recommended
      * so the map is drawn before the rest of the scene.
-     * Note: flat map geometry is drawn with `depthTest` disabled on its material,
-     * relying on this order for layering. Line types use the range
+     * Flat map layers lie on the same plane: they are drawn without writing depth
+     * (only during their own draw — the material itself is not modified) and are
+     * stacked by this order. They are still depth tested, so buildings and your
+     * objects in front of them hide them. Line types use the range
      * `[renderingOrder, renderingOrder + 1)` to stack bridges, tunnels, outlines
      * and fills, so types one unit apart never interleave.
      * @type {number}
@@ -130,6 +138,32 @@ export class BaseFeatureType {
             console.warn('ThreeGeoPlay: it is recommended to use values below 0 for the rendering order of the map parts');
         }
         this.#renderingOrder = num;
+        this._touch();
+    }
+
+    // ── shadows ──────────────────────────────────────────────────────────────
+
+    /**
+     * Whether this type casts shadows (Three.js `castShadow`). Shadows are only
+     * rendered when `renderer.shadowMap.enabled` is true and a light casts them.
+     * @type {boolean}
+     */
+    get castShadow() { return this.#castShadow; }
+    set castShadow(v) {
+        this.#castShadow = !!v;
+        this._touch();
+    }
+
+    /**
+     * Whether this type receives shadows (Three.js `receiveShadow`). Only lit
+     * materials (`MeshLambertMaterial`, `MeshStandardMaterial`, …) show them; with
+     * the default unlit materials, ground shadows are drawn by
+     * {@link MapStyle#shadowLayer}.
+     * @type {boolean}
+     */
+    get receiveShadow() { return this.#receiveShadow; }
+    set receiveShadow(v) {
+        this.#receiveShadow = !!v;
         this._touch();
     }
 }

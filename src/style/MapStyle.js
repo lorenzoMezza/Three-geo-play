@@ -5,6 +5,7 @@ import { LandCoverLayer } from './layers/Landcoverlayer.js';
 import { TransportationLayer } from './layers/Transportationlayer.js';
 import { WaterwayLayer } from './layers/Waterwaylayer.js';
 import { BackgroundLayer } from './layers/Backgroundlayer.js';
+import { ShadowLayer } from './layers/Shadowlayer.js';
 import { nextStyleStamp } from './core/styleStamp.js';
 
 /**
@@ -48,6 +49,9 @@ export class MapStyle {
     /** @type {BackgroundLayer} */
     #backgroundLayer;
 
+    /** @type {ShadowLayer} */
+    #shadowLayer;
+
     /** @type {number} */
     #stamp = 0;
 
@@ -59,6 +63,7 @@ export class MapStyle {
         this.#landCoverLayer      = new LandCoverLayer();
         this.#transportationLayer = new TransportationLayer();
         this.#backgroundLayer     = new BackgroundLayer();
+        this.#shadowLayer         = new ShadowLayer();
     }
 
     /**
@@ -77,13 +82,14 @@ export class MapStyle {
             this.#landCoverLayer._stamp,
             this.#transportationLayer._stamp,
             this.#backgroundLayer._stamp,
+            this.#shadowLayer._stamp,
         );
     }
 
     /**
      * Retrieves a style layer by its internal OSM layer name.
-     * @param {'background'|'waterway'|'water'|'landcover'|'landuse'|'building'|'transportation'} layerName
-     * @returns {BackgroundLayer|WaterwayLayer|WaterLayer|LandCoverLayer|LandUseLayer|BuildingLayer|TransportationLayer|null}
+     * @param {'background'|'waterway'|'water'|'landcover'|'landuse'|'building'|'transportation'|'shadow'} layerName
+     * @returns {BackgroundLayer|WaterwayLayer|WaterLayer|LandCoverLayer|LandUseLayer|BuildingLayer|TransportationLayer|ShadowLayer|null}
      */
     getStyleLayerByName(layerName) {
         switch (layerName) {
@@ -94,6 +100,7 @@ export class MapStyle {
             case 'landuse':        return this.#landUseLayer;
             case 'building':       return this.#buildingLayer;
             case 'transportation': return this.#transportationLayer;
+            case 'shadow':         return this.#shadowLayer;
             default:               return null;
         }
     }
@@ -146,6 +153,14 @@ export class MapStyle {
      */
     get backgroundLayer()      { return this.#backgroundLayer; }
     set backgroundLayer(layer) { this.#backgroundLayer = this.#checked(layer, BackgroundLayer, 'backgroundLayer'); }
+
+    /**
+     * Shadows cast on the ground, drawn over the flat layers while
+     * `renderer.shadowMap.enabled` is true (see {@link ShadowLayer}).
+     * @type {ShadowLayer}
+     */
+    get shadowLayer()      { return this.#shadowLayer; }
+    set shadowLayer(layer) { this.#shadowLayer = this.#checked(layer, ShadowLayer, 'shadowLayer'); }
 
     /**
      * @template T

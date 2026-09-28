@@ -6,12 +6,8 @@ import { FloatArrayBuilder }    from '../geom_utils/FloatArrayBuilder.js';
 import { appendThickLine }      from '../geom_utils/lineGeometry.js';
 import { simplifyLine }         from '../geom_utils/RDPalgoritm.js';
 import { LineLayering, lineLevel } from './lineLayering.js';
-import {
-    classifyRings,
-    clipPolygon,
-    appendFlatPolygon,
-    appendExtrudedPolygon,
-} from '../geom_utils/polygonGeometry.js';
+import { classifyRings, clipPolygon, appendFlatPolygon } from '../geom_utils/polygonGeometry.js';
+import { BuildingGeometryBuilder, BuildingShading, roofVariation } from '../geom_utils/buildingGeometry.js';
 
 
 const TILE_BORDER_MATERIAL = new THREE.LineBasicMaterial({
@@ -22,6 +18,9 @@ const BORDER_Y = 0.01;
 
 /** Height used for buildings without height data, in metres. */
 const DEFAULT_BUILDING_HEIGHT_M = 10;
+
+/** Height over which the ambient occlusion of building walls fades out, in metres. */
+const AMBIENT_OCCLUSION_HEIGHT_M = 10;
 
 /** Line simplification tolerance, as a fraction of the tile extent. */
 const LINE_SIMPLIFY_TOLERANCE = 2 / 4096;
@@ -94,11 +93,14 @@ export class Tile {
 
         const size    = ctx.tileWorldSize;
         const batches = new Map();
-        const batchFor = (kind, material, renderOrder) => {
-            const key = `${kind}|${material.id}|${renderOrder}`;
+        const batchFor = (kind, material, renderOrder, style) => {
+            const { castShadow, receiveShadow } = style;
+            const depthPrepass = kind === 'building' && style.depthPrepass;
+            const key = `${kind}|${material.id}|${renderOrder}|${castShadow}|${receiveShadow}|${depthPrepass}`;
             let batch = batches.get(key);
             if (!batch) {
-                batch = { kind, material, renderOrder, out: new FloatArrayBuilder() };
+                const out = kind === 'building' ? new BuildingGeometryBuilder() : new FloatArrayBuilder();
+                batch = { kind, material, renderOrder, castShadow, receiveShadow, depthPrepass, out };
                 batches.set(key, batch);
             }
             return batch.out;
@@ -114,9 +116,9 @@ export class Tile {
             const level        = lineLevel(props);
             const roundEnds    = level === 0;   // bridges / tunnels end flat on the road they join
             const outlineExtra = style.outlineWidth * size * ctx.zoomScale;
-            const fillOut      = batchFor('line', style.material, layering.fillOrder(style, level, isRamp));
+            const fillOut      = batchFor('line', style.material, layering.fillOrder(style, level, isRamp), style);
             const outlineOut   = outlineExtra > 0 && style.outlineMaterial
-                ? batchFor('outline', style.outlineMaterial, layering.outlineOrder(style, level))
+                ? batchFor('outline', style.outlineMaterial, layering.outlineOrder(style, level), style)
                 : null;
             const scale     = size / extent;
             const tolerance = LINE_SIMPLIFY_TOLERANCE * extent;
@@ -133,7 +135,7 @@ export class Tile {
 
         // ── flat polygons ────────────────────────────────────────────────────
         for (const { style, feature, extent } of polygons) {
-            const out    = batchFor('polygon', style.material, style.renderingOrder);
+            const out    = batchFor('polygon', style.material, style.renderingOrder, style);
             const margin = CLIP_MARGIN * extent;
             for (const polygon of classifyRings(feature.loadGeometry())) {
                 const clipped = clipPolygon(polygon, -margin, extent + margin);
@@ -142,22 +144,35 @@ export class Tile {
         }
 
         // ── buildings ────────────────────────────────────────────────────────
+        const shadings = new Map();
+        const roof     = { r: 1, g: 1, b: 1 };
         for (const { style, feature, extent } of buildings) {
             const props     = feature.properties;
             const k         = ctx.unitsPerMeter * style.height;
-            const height    = toFiniteNumber(props.render_height ?? props.height, DEFAULT_BUILDING_HEIGHT_M);
-            const minHeight = toFiniteNumber(props.render_min_height ?? props.min_height, 0);
-            const yTop      = style.Y + Math.max(0, height) * k;
-            const yBase     = style.Y + Math.max(0, minHeight) * k;
+            const height    = Math.max(0, toFiniteNumber(props.render_height ?? props.height, DEFAULT_BUILDING_HEIGHT_M));
+            const minHeight = Math.max(0, toFiniteNumber(props.render_min_height ?? props.min_height, 0));
+            const yTop      = style.Y + height * k;
+            const yBase     = style.Y + minHeight * k;
             if (yTop < yBase) continue;
 
-            const out    = batchFor('building', style.material, null);
+            let shading = shadings.get(style);
+            if (!shading) {
+                shading = { shade: buildingShading(style, k), tint: style.roofColor };
+                shadings.set(style, shading);
+            }
+            const tint = shading.tint;
+            const tone = roofVariation(height, minHeight, style.colorVariation);
+            roof.r = tint.r * tone;
+            roof.g = tint.g * tone;
+            roof.b = tint.b * tone;
+
+            const out    = batchFor('building', style.material, null, style);
             const margin = CLIP_MARGIN * extent;
             const min    = -margin;
             const max    = extent + margin;
             for (const polygon of classifyRings(feature.loadGeometry())) {
                 const clipped = clipPolygon(polygon, min, max);
-                if (clipped) appendExtrudedPolygon(out, clipped, size / extent, yBase, yTop, min, max);
+                if (clipped) out.appendBuilding(clipped, size / extent, yBase, yTop, min, max, shading.shade, roof, minHeight > 0);
             }
         }
 
@@ -240,21 +255,42 @@ export class Tile {
 
 
 function createGeometry({ kind, material, out }) {
-    const positions = out.toFloat32Array();
-    const geometry  = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const geometry = new THREE.BufferGeometry();
 
-    // Lit materials need normals; unlit ones (the defaults) do not pay for them.
-    if (!material.isMeshBasicMaterial) {
-        if (kind === 'building') {
-            geometry.computeVertexNormals();
-        } else {
-            const normals = new Float32Array(positions.length);
-            for (let i = 1; i < normals.length; i += 3) normals[i] = 1;
-            geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-        }
+    // Lit materials need normals and only `vertexColors` materials read colours:
+    // the defaults (unlit) do not pay for what they do not use.
+    const needsNormals = !material.isMeshBasicMaterial;
+
+    if (kind === 'building') {
+        geometry.setAttribute('position', new THREE.BufferAttribute(out.positions.toFloat32Array(), 3));
+        if (needsNormals)          geometry.setAttribute('normal', new THREE.BufferAttribute(out.normals.toFloat32Array(), 3));
+        if (material.vertexColors) geometry.setAttribute('color',  new THREE.BufferAttribute(out.colorBytes(), 3, true));
+        return geometry;
+    }
+
+    const positions = out.toFloat32Array();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    if (needsNormals) {
+        const normals = new Float32Array(positions.length);
+        for (let i = 1; i < normals.length; i += 3) normals[i] = 1;
+        geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
     }
     return geometry;
+}
+
+/**
+ * Shading baked into the buildings of one style (see {@link BuildingShading}).
+ * The directional part is only baked for unlit materials: lit ones get it from the scene lights.
+ * @param {import('../style/layers/Buildinglayer.js').BuildingLayer} style
+ * @param {number} k - Local units per (exaggerated) metre.
+ */
+function buildingShading(style, k) {
+    return new BuildingShading({
+        groundY:          style.Y,
+        aoTop:            style.Y + AMBIENT_OCCLUSION_HEIGHT_M * k,
+        ambientOcclusion: style.ambientOcclusion ?? 0,
+        wallShading:      style.material?.isMeshBasicMaterial ? (style.wallShading ?? 0) : 0,
+    });
 }
 
 function scaled(points, scale) {

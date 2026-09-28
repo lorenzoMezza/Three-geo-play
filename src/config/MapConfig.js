@@ -12,7 +12,7 @@ const REBUILD_REQUIRED_FIELDS = new Set(['zoomLevel', 'tileUrl', 'accessToken'])
 const SETTABLE = new Set([
     'tileUrl', 'accessToken', 'tileSchema', 'zoomLevel', 'renderDistance', 'tileWorldSize',
     'tileLayout', 'originLatLon', 'worldOriginOffset', 'viewMode', 'mapStyle',
-    'showTileBorders', 'followUpdateInterval', 'pbfTileProviderZXYurl',
+    'showTileBorders', 'followUpdateInterval', 'occludeBelowGround', 'pbfTileProviderZXYurl',
 ]);
 
 const MIN_ZOOM = 0;
@@ -134,6 +134,9 @@ export class MapConfig {
      * @type {boolean}
      */
     #showTileBorders = false;
+
+    /** @type {boolean} */
+    #occludeBelowGround = true;
 
     /** @type {Set<string>} */
     #dirtyFields = new Set();
@@ -403,6 +406,20 @@ export class MapConfig {
     set showTileBorders(value) {
         this.#showTileBorders = !!value;
         this.#dirtyFields.add('showTileBorders');
+    }
+
+    /**
+     * When true (default), the map ground hides what is below it, like a solid
+     * floor: an invisible plane writes the depth of the ground under the loaded
+     * area before anything else is drawn. Objects standing on the map or above it
+     * are not affected. Set it to false to see through the ground (e.g. for
+     * underground scenes or when you draw your own terrain).
+     * @type {boolean}
+     */
+    get occludeBelowGround() { return this.#occludeBelowGround; }
+    set occludeBelowGround(value) {
+        this.#occludeBelowGround = !!value;
+        this.#dirtyFields.add('occludeBelowGround');
     }
 
     /**

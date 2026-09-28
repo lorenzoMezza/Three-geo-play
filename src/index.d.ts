@@ -93,17 +93,33 @@ export interface TileStats {
 export declare class BaseFeatureType {
     /** Whether this type is rendered. */
     isVisible: boolean;
-    /** Fill material. Map geometry faces up (+Y): `THREE.FrontSide` materials work. */
+    /**
+     * Fill material, used as is (ThreeGeoPlay never modifies it, so it can be shared
+     * with your own objects). Map geometry faces up (+Y): `THREE.FrontSide` materials work.
+     */
     material: THREE.Material | null;
     /** Height (world units) at which this type is drawn. */
     Y: number;
     /**
-     * Three.js render order. Flat map geometry is drawn with `depthTest`
-     * disabled on its material and layered by this value (negative recommended).
+     * Three.js render order (negative recommended). Flat map layers lie on the same
+     * plane: they are drawn without writing depth (during their own draw only) and
+     * stacked by this value; they are still depth tested, so buildings and your
+     * objects in front of them hide them. A transparent flat layer is drawn after
+     * every opaque one (Three.js draws transparent objects last).
      * Line types use `[renderingOrder, renderingOrder + 1)`: tunnels < ground < bridges,
      * outlines below fills, wider lines above narrower ones.
      */
     renderingOrder: number;
+    /**
+     * Casts shadows (default `false`; `true` for buildings). Shadows need
+     * `renderer.shadowMap.enabled` and a light with `castShadow`.
+     */
+    castShadow: boolean;
+    /**
+     * Receives shadows (default `false`; `true` for buildings). Only lit materials show them;
+     * with the default unlit map materials, ground shadows come from `MapStyle.shadowLayer`.
+     */
+    receiveShadow: boolean;
     setVisible(v: boolean): void;
 }
 
@@ -149,6 +165,8 @@ export declare class BaseLayer<TName extends string, TType extends BaseFeatureTy
     setAllMaterials(material: THREE.Material): void;
     /** Sets `isVisible` on every type of the layer. */
     setVisibleAll(isVisible: boolean): void;
+    /** Sets `receiveShadow` on every type of the layer (useful with lit materials). */
+    setReceiveShadowAll(receiveShadow: boolean): void;
 }
 
 /** Background base-fill plane rendered beneath everything else. */
@@ -156,10 +174,40 @@ export declare class BackgroundLayer extends BaseFeatureType {
     getTypeByName(name: string): this;
 }
 
-/** 3D building extrusion layer (`renderingOrder` is not applied to buildings). */
+/**
+ * 3D building extrusion layer (`renderingOrder` is not applied to buildings).
+ *
+ * Buildings are ordinary depth-tested solids: they hide and are hidden by your objects,
+ * cast and receive shadows, and their material is used exactly as configured.
+ * Every vertex carries a baked colour — used by materials with `vertexColors: true`,
+ * multiplied by `material.color` — made of the wall shading, the ambient occlusion,
+ * the roof tint and the roof tone variation below.
+ *
+ * @example
+ * style.buildingLayer.material  = new THREE.MeshStandardMaterial({ color: 0xeeeeee, vertexColors: true });
+ * style.buildingLayer.roofColor = 0xd9a58c;
+ */
 export declare class BuildingLayer extends BaseFeatureType {
     /** Vertical exaggeration of the real OSM heights: `1` = true scale, `0` = flat. */
     height: number;
+    /**
+     * Baked directional shading of the walls, 0–1 (default 0.6): walls facing away from a
+     * south-west sun get darker. Applies to `MeshBasicMaterial`s; lit materials are shaded
+     * by your lights. `0` disables it.
+     */
+    wallShading: number;
+    /** Darkening of the walls near the ground, 0–1 (default 0.45); fades out over the first ten metres. */
+    ambientOcclusion: number;
+    /** Tint of the roofs, multiplied by the material colour (default white). The getter returns a copy. */
+    get roofColor(): THREE.Color;
+    set roofColor(value: THREE.ColorRepresentation);
+    /** Tone variation from roof to roof, 0–1 (default 0.08). */
+    colorVariation: number;
+    /**
+     * With a transparent material, draw depth before colour so only the surface nearest to
+     * the camera is blended — no inner walls (default `true`). No effect on opaque materials.
+     */
+    depthPrepass: boolean;
     /** Reserved for future roof/detail rendering. Currently has no effect. */
     allowDetails: boolean;
     getTypeByName(name: string): this;
@@ -167,6 +215,15 @@ export declare class BuildingLayer extends BaseFeatureType {
     setY(y: number): this;
     setHeight(h: number): this;
     setAllowDetails(val: boolean): this;
+}
+
+/**
+ * Shadows cast on the ground by buildings and scene objects: a transparent plane with a
+ * `THREE.ShadowMaterial` laid over the flat layers, drawn only while
+ * `renderer.shadowMap.enabled` is true.
+ */
+export declare class ShadowLayer extends BaseFeatureType {
+    getTypeByName(name: string): this;
 }
 
 export type LandCoverClassName =
@@ -361,7 +418,7 @@ export declare class TransportationLayer extends BaseLayer<TransportClassName, R
 
 // ─── MapStyle ─────────────────────────────────────────────────────────────────
 
-export type StyleLayerName = 'background' | 'waterway' | 'water' | 'landcover' | 'landuse' | 'building' | 'transportation';
+export type StyleLayerName = 'background' | 'waterway' | 'water' | 'landcover' | 'landuse' | 'building' | 'transportation' | 'shadow';
 
 /**
  * Top-level style container for a ThreeGeoPlay map.
@@ -382,6 +439,8 @@ export declare class MapStyle {
     landCoverLayer: LandCoverLayer;
     transportationLayer: TransportationLayer;
     backgroundLayer: BackgroundLayer;
+    /** Ground shadows, drawn while `renderer.shadowMap.enabled` is true. */
+    shadowLayer: ShadowLayer;
     getStyleLayerByName(layerName: 'background'): BackgroundLayer;
     getStyleLayerByName(layerName: 'waterway'): WaterwayLayer;
     getStyleLayerByName(layerName: 'water'): WaterLayer;
@@ -389,7 +448,8 @@ export declare class MapStyle {
     getStyleLayerByName(layerName: 'landuse'): LandUseLayer;
     getStyleLayerByName(layerName: 'building'): BuildingLayer;
     getStyleLayerByName(layerName: 'transportation'): TransportationLayer;
-    getStyleLayerByName(layerName: string): BackgroundLayer | WaterwayLayer | WaterLayer | LandCoverLayer | LandUseLayer | BuildingLayer | TransportationLayer | null;
+    getStyleLayerByName(layerName: 'shadow'): ShadowLayer;
+    getStyleLayerByName(layerName: string): BackgroundLayer | WaterwayLayer | WaterLayer | LandCoverLayer | LandUseLayer | BuildingLayer | TransportationLayer | ShadowLayer | null;
 }
 
 // ─── MapConfig ────────────────────────────────────────────────────────────────
@@ -443,6 +503,11 @@ export declare class MapConfig {
     mapStyle: MapStyle;
     /** Draws a visible border around each tile — useful for debugging. */
     showTileBorders: boolean;
+    /**
+     * The map ground hides what is below it, like a solid floor (default `true`): an invisible
+     * plane writes the ground depth before anything else is drawn. `false` lets you see through it.
+     */
+    occludeBelowGround: boolean;
     /** Scale factor relative to zoom level 18. */
     readonly zoomScaleFactor: number;
     /** True if any property has changed since the last flush. */
@@ -473,6 +538,7 @@ export interface MapConfigOptions {
     viewMode?: ViewMode;
     mapStyle?: MapStyle;
     showTileBorders?: boolean;
+    occludeBelowGround?: boolean;
     followUpdateInterval?: number;
     /** @deprecated Use `tileUrl`. */
     pbfTileProviderZXYurl?: string;

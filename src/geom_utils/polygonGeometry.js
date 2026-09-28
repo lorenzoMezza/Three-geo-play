@@ -129,7 +129,12 @@ export function clipPolygon(polygon, min, max) {
     return result;
 }
 
-function triangulate(polygon) {
+/**
+ * Triangulates a polygon.
+ * @param {number[][]} polygon - `[exterior, ...holes]` in extent coordinates.
+ * @returns {{ flat: ArrayLike<number>, indices: number[] }} Coordinates of every ring, one after the other, and the triangle indices into them.
+ */
+export function triangulate(polygon) {
     if (polygon.length === 1) return { flat: polygon[0], indices: earcut(polygon[0], null, 2) };
 
     const holeIndices = [];
@@ -162,39 +167,5 @@ export function appendFlatPolygon(out, polygon, scale, y) {
             flat[c] * scale, y, flat[c + 1] * scale,
             flat[b] * scale, y, flat[b + 1] * scale,
         );
-    }
-}
-
-/**
- * Appends an extruded polygon (roof + walls). Walls face away from the solid;
- * walls lying on the clip boundary (`min`/`max`) are skipped so buildings split
- * across tiles show no internal seams.
- *
- * @param {import('./FloatArrayBuilder.js').FloatArrayBuilder} out
- * @param {number[][]} polygon - `[exterior, ...holes]`, exterior with positive area.
- * @param {number} scale
- * @param {number} yBase
- * @param {number} yTop
- * @param {number} min - Clip boundary (extent coordinates).
- * @param {number} max
- */
-export function appendExtrudedPolygon(out, polygon, scale, yBase, yTop, min, max) {
-    appendFlatPolygon(out, polygon, scale, yTop);
-    if (!(yTop > yBase)) return;
-
-    for (const ring of polygon) {
-        const n = ring.length;
-        out.reserve(n * 9);
-        for (let i = 0, j = n - 2; i < n; j = i, i += 2) {
-            const rx0 = ring[j], ry0 = ring[j + 1];
-            const rx1 = ring[i], ry1 = ring[i + 1];
-            if ((rx0 === rx1 && (rx0 === min || rx0 === max)) ||
-                (ry0 === ry1 && (ry0 === min || ry0 === max))) continue;
-
-            const x0 = rx0 * scale, z0 = ry0 * scale;
-            const x1 = rx1 * scale, z1 = ry1 * scale;
-            out.pushTriangle(x0, yTop, z0,  x1, yBase, z1,  x0, yBase, z0);
-            out.pushTriangle(x0, yTop, z0,  x1, yTop,  z1,  x1, yBase, z1);
-        }
     }
 }
