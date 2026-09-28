@@ -243,6 +243,7 @@ export function buildPanel(root, app) {
         label: 'Glass: hide inner walls',
         get: () => buildings().depthPrepass, set: v => { buildings().depthPrepass = v },
     })
+    hint(bld, 'Below 100 % opacity only the nearest surface is blended. Unticked, every face is blended as in plain three.js, and the result depends on the draw order.')
     slider(bld, {
         label: 'Ambient occlusion', min: 0, max: 1, step: 0.05,
         get: () => buildings().ambientOcclusion, set: v => { buildings().ambientOcclusion = v },
