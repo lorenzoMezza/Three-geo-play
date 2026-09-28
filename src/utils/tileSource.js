@@ -116,9 +116,9 @@ function mapboxToHttps(url, accessToken) {
         : `${MAPBOX_API}/v4/${path}.json?secure&${token}`;
 }
 
-/** Adds the access token to Mapbox URLs that do not carry one. */
+/** Adds the access token to Mapbox URLs that do not carry one. Requires HTTPS so the token is never sent in clear text. */
 function withMapboxToken(url, accessToken) {
-    if (!accessToken || !/^https?:\/\/([a-z0-9-]+\.)*mapbox\.com\//i.test(url) || /[?&]access_token=/.test(url)) return url;
+    if (!accessToken || !/^https:\/\/([a-z0-9-]+\.)*mapbox\.com\//i.test(url) || /[?&]access_token=/.test(url)) return url;
     return `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(accessToken)}`;
 }
 
