@@ -121,7 +121,13 @@ buildings.colorVariation   = 0.08;     // slight tone change from roof to roof
 
 With a lit material (`MeshLambertMaterial`, `MeshStandardMaterial`, …) your lights shade the walls and the baked colour adds the ambient occlusion and the roof tones. Wall colours depend only on the wall direction and height, so where OSM buildings overlap their shared walls get the same colour and cannot flicker.
 
-**Transparent buildings.** With `transparent: true` and `opacity < 1`, only the surface nearest to the camera is blended: the buildings' depth is drawn first (`buildings.depthPrepass`, on by default), so walls behind and between buildings stay hidden and objects behind them show through a single layer of "glass". The depth pass reuses the building material itself with colour writes off, so both passes compute exactly the same depth and the glass never flickers while the camera moves (custom shaders included). Set `depthPrepass = false` for plain Three.js blending of every face.
+**Transparent buildings.** With `transparent: true` and `opacity < 1`, each pixel is blended once, with the surface nearest to the camera (`buildings.depthPrepass`, on by default): walls behind and between buildings stay hidden and objects behind them show through a single layer of "glass". The buildings' depth is drawn first with the building material itself (colour writes off), so both passes compute exactly the same depth, and a stencil bit (`0x80`) lets only one fragment per pixel be blended — so faces that coincide in the tile data (outlines drawn together with their `building:part`s, duplicated footprints, parts sharing walls) cannot be blended twice and flicker while the camera moves. Create the renderer with a stencil buffer for this:
+
+```js
+const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true }); // render targets: stencilBuffer: true
+```
+
+Without it ThreeGeoPlay warns once and coinciding faces are blended twice. Set `depthPrepass = false` for plain Three.js blending of every face.
 
 ### Your objects and the map
 

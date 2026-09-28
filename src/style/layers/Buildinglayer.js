@@ -174,13 +174,15 @@ export class BuildingLayer extends BaseFeatureType {
     }
 
     /**
-     * With a transparent material, draw the buildings' depth before their
-     * colour, so only the surface nearest to the camera is blended (default
-     * `true`): walls behind and between buildings stay hidden, and objects
-     * behind the buildings show through a single layer of "glass".
-     * The depth pass reuses the material itself (colour writes off), so it
-     * matches the colour pass exactly — also with custom shaders — and never
-     * flickers. Set it to `false` for plain Three.js blending of every face.
+     * With a transparent material, blend each pixel once, with the surface
+     * nearest to the camera (default `true`): walls behind and between
+     * buildings stay hidden, and objects behind the buildings show through a
+     * single layer of "glass". The depth is drawn first with the material
+     * itself (colour writes off, so it matches the colour pass exactly — also
+     * with custom shaders), and stencil bit `0x80` stops faces that coincide in
+     * the tile data from being blended twice. That needs a stencil buffer:
+     * `new THREE.WebGLRenderer({ stencil: true })`.
+     * Set it to `false` for plain Three.js blending of every face.
      * Has no effect on opaque materials.
      * @type {boolean}
      */
