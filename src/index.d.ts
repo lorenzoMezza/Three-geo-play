@@ -204,8 +204,9 @@ export declare class BuildingLayer extends BaseFeatureType {
     /** Tone variation from roof to roof, 0–1 (default 0.08). */
     colorVariation: number;
     /**
-     * With a transparent material, draw depth before colour so only the surface nearest to
-     * the camera is blended — no inner walls (default `true`). No effect on opaque materials.
+     * With a transparent material, blend each pixel once, with the surface nearest to the camera —
+     * no inner walls, no flicker where faces of the tile data coincide (default `true`). Uses stencil
+     * bit `0x80`: create the renderer with `{ stencil: true }`. No effect on opaque materials.
      */
     depthPrepass: boolean;
     /** Reserved for future roof/detail rendering. Currently has no effect. */
