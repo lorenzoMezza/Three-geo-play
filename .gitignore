@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# Library checkout used by the GitHub Actions build
+.three-geo-play/
+.DS_Store
