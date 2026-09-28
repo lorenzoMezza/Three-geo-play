@@ -3,25 +3,39 @@
   "version": "2.0.0",
   "description": "Real-world maps in Three.js: OpenStreetMap vector tiles rendered as 3D geometry — roads, water, land use and extruded buildings — ready for games and apps.",
   "type": "module",
-  "main": "./src/index.js",
-  "module": "./src/index.js",
-  "types": "./src/index.d.ts",
+  "main": "./dist/three-geo-play.cjs",
+  "module": "./dist/three-geo-play.js",
+  "types": "./dist/three-geo-play.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.d.ts",
-      "import": "./src/index.js",
-      "default": "./src/index.js"
+      "import": {
+        "types": "./dist/three-geo-play.d.ts",
+        "default": "./dist/three-geo-play.js"
+      },
+      "require": {
+        "types": "./dist/three-geo-play.d.cts",
+        "default": "./dist/three-geo-play.cjs"
+      }
     },
     "./package.json": "./package.json"
   },
   "files": [
-    "src",
+    "dist",
+    "API.md",
     "README.md",
     "LICENSE"
   ],
   "sideEffects": false,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/check-package.mjs",
+    "prepublishOnly": "npm run build && npm run check"
+  },
   "peerDependencies": {
     "three": ">=0.150.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
   },
   "keywords": [
     "three",
