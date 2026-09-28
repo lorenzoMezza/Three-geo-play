@@ -81,6 +81,13 @@ export class Tile {
     #unitsPerMeter = 1;
 
     /**
+     * Building footprints of the latest build, for {@link heightAt}: a grid of
+     * cells over the tile, each listing the parts that overlap it.
+     * @type {{ cells: Map<number, { rings: number[][], scale: number, top: number, minX: number, maxX: number, minZ: number, maxZ: number }[]> } | null}
+     */
+    #footprints = null;
+
+    /**
      * Public description of the tile handed to the user (`tileload` events,
      * picked features); set by the tile manager.
      * @type {Object|null}
@@ -105,6 +112,24 @@ export class Tile {
 
     /** Local units per metre (heights included), as used by the latest build. */
     get unitsPerMeter() { return this.#unitsPerMeter; }
+
+    /**
+     * Height (local units) of the highest building part covering a point of
+     * the tile's local frame, or `null` where there is none.
+     * @param {number} lx
+     * @param {number} lz
+     * @returns {number|null}
+     */
+    heightAt(lx, lz) {
+        const parts = this.#footprints?.cells.get(footprintCell(lx, lz, this.#frameSize));
+        if (!parts) return null;
+        let top = null;
+        for (const p of parts) {
+            if ((top !== null && p.top <= top) || lx < p.minX || lx > p.maxX || lz < p.minZ || lz > p.maxZ) continue;
+            if (insideRings(p.rings, lx / p.scale, lz / p.scale)) top = p.top;
+        }
+        return top;
+    }
 
     /**
      * Decodes the features of the tile — every layer, including those the map
@@ -187,20 +212,25 @@ export class Tile {
         };
 
         // ── lines ────────────────────────────────────────────────────────────
-        const layering = new LineLayering(ctx.mapStyle);
+        const relative = size * ctx.zoomScale;   // local units per `lineWidth` unit
+        const layering = new LineLayering(ctx.mapStyle, unitsPerMeter / relative);
         for (const item of lines) {
             const { style, feature, extent, ramp: isRamp } = item;
-            const width = style.lineWidth * size * ctx.zoomScale;
+            const width = style.lineWidthMeters === null ? style.lineWidth * relative : style.lineWidthMeters * unitsPerMeter;
             if (!(width > 0)) continue;
 
             const props        = feature.properties;
             const level        = lineLevel(props);
             const roundEnds    = level === 0;   // bridges / tunnels end flat on the road they join
-            const outlineExtra = style.outlineWidth * size * ctx.zoomScale;
+            const outlineExtra = style.outlineWidthMeters === null ? style.outlineWidth * relative : style.outlineWidthMeters * unitsPerMeter;
             const y            = style.Y * toLocal;
-            const fillOut      = batchFor('line', style.material, layering.fillOrder(style, level, isRamp), item);
-            const outlineOut   = outlineExtra > 0 && style.outlineMaterial
-                ? batchFor('outline', style.outlineMaterial, layering.outlineOrder(style, level), item)
+            const custom       = style.featureStyle ? featureOverrides(item) : null;
+            if (custom?.visible === false) continue;
+            const material        = asMaterial(custom?.material) ?? style.material;
+            const outlineMaterial = asMaterial(custom?.outlineMaterial) ?? style.outlineMaterial;
+            const fillOut      = batchFor('line', material, layering.fillOrder(style, level, isRamp), item);
+            const outlineOut   = outlineExtra > 0 && outlineMaterial
+                ? batchFor('outline', outlineMaterial, layering.outlineOrder(style, level), item)
                 : null;
             const scale     = size / extent;
             const tolerance = LINE_SIMPLIFY_TOLERANCE * extent;
@@ -218,7 +248,9 @@ export class Tile {
         // ── flat polygons ────────────────────────────────────────────────────
         for (const item of polygons) {
             const { style, feature, extent } = item;
-            const out    = batchFor('polygon', style.material, style.renderingOrder, item);
+            const custom = style.featureStyle ? featureOverrides(item) : null;
+            if (custom?.visible === false) continue;
+            const out    = batchFor('polygon', asMaterial(custom?.material) ?? style.material, style.renderingOrder, item);
             const margin = CLIP_MARGIN * extent;
             for (const polygon of classifyRings(feature.loadGeometry())) {
                 const clipped = clipPolygon(polygon, -margin, extent + margin);
@@ -227,24 +259,28 @@ export class Tile {
         }
 
         // ── buildings ────────────────────────────────────────────────────────
-        const shadings = new Map();
-        const roof     = { r: 1, g: 1, b: 1 };
-        const walls    = { r: 1, g: 1, b: 1 };
+        const shadings   = new Map();
+        const roof       = { r: 1, g: 1, b: 1 };
+        const walls      = { r: 1, g: 1, b: 1 };
+        const footprints = new Map();
         for (const item of buildings) {
             const { style, feature, extent } = item;
             const props   = feature.properties;
             let height    = Math.max(0, toFiniteNumber(props.render_height ?? props.height, DEFAULT_BUILDING_HEIGHT_M));
             let minHeight = Math.max(0, toFiniteNumber(props.render_min_height ?? props.min_height, 0));
             let color     = WHITE;
+            let material  = style.material;
 
             // Per-building overrides from the style (data-driven styling).
-            if (style.featureStyle) {
-                const custom = callFeatureStyle(style.featureStyle, { id: feature.id, properties: props, sourceLayer: item.sourceLayer, type: item.type });
-                if (custom) {
-                    if (custom.visible === false) continue;
-                    if (Number.isFinite(custom.height))    height    = Math.max(0, custom.height);
-                    if (Number.isFinite(custom.minHeight)) minHeight = Math.max(0, custom.minHeight);
-                    if (custom.color !== undefined && custom.color !== null) color = TMP_COLOR.set(custom.color);
+            const custom = style.featureStyle ? featureOverrides(item) : null;
+            if (custom) {
+                if (custom.visible === false) continue;
+                if (Number.isFinite(custom.height))    height    = Math.max(0, custom.height);
+                if (Number.isFinite(custom.minHeight)) minHeight = Math.max(0, custom.minHeight);
+                material = asMaterial(custom.material) ?? material;
+                if (custom.color !== undefined && custom.color !== null) {
+                    color = TMP_COLOR.set(custom.color);
+                    if (!material.vertexColors) warnColorIgnored(material);
                 }
             }
 
@@ -260,7 +296,7 @@ export class Tile {
                 shadings.set(style, shading);
             }
             const tint = shading.tint;
-            const tone = roofVariation(height, minHeight, style.colorVariation);
+            const tone = roofVariation(height, style.colorVariation);
             roof.r  = tint.r * tone * color.r;
             roof.g  = tint.g * tone * color.g;
             roof.b  = tint.b * tone * color.b;
@@ -268,15 +304,19 @@ export class Tile {
             walls.g = color.g;
             walls.b = color.b;
 
-            const out    = batchFor('building', style.material, null, item);
+            const out    = batchFor('building', material, null, item);
             const margin = CLIP_MARGIN * extent;
             const min    = -margin;
             const max    = extent + margin;
+            const scale = size / extent;
             for (const polygon of classifyRings(feature.loadGeometry())) {
                 const clipped = clipPolygon(polygon, min, max);
-                if (clipped) out.appendBuilding(clipped, size / extent, yBase, yTop, min, max, shading.shade, roof, walls, minHeight > 0);
+                if (!clipped) continue;
+                out.appendBuilding(clipped, scale, yBase, yTop, min, max, shading.shade, roof, walls, minHeight > 0);
+                indexFootprint(footprints, clipped, scale, yTop, size);
             }
         }
+        this.#footprints = { cells: footprints };
 
         // Add the new geometry before removing the old one: no empty frame.
         const handles = [];
@@ -397,24 +437,94 @@ function buildingShading(style, groundY, k) {
     });
 }
 
+/** Cells per tile side of the footprint grid used by {@link Tile#heightAt}. */
+const FOOTPRINT_CELLS = 16;
+
+function footprintCell(lx, lz, size) {
+    const n = FOOTPRINT_CELLS / size;
+    const cx = Math.min(FOOTPRINT_CELLS - 1, Math.max(0, Math.floor(lx * n)));
+    const cz = Math.min(FOOTPRINT_CELLS - 1, Math.max(0, Math.floor(lz * n)));
+    return cz * FOOTPRINT_CELLS + cx;
+}
+
+/** Adds a building part to the footprint grid (bounds in local units, rings kept in extent units). */
+function indexFootprint(cells, rings, scale, top, size) {
+    const part = { rings, scale, top, minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+    for (const ring of rings) {
+        for (let i = 0; i < ring.length; i += 2) {
+            const x = ring[i] * scale, z = ring[i + 1] * scale;
+            if (x < part.minX) part.minX = x;
+            if (x > part.maxX) part.maxX = x;
+            if (z < part.minZ) part.minZ = z;
+            if (z > part.maxZ) part.maxZ = z;
+        }
+    }
+    const a = footprintCell(part.minX, part.minZ, size);
+    const b = footprintCell(part.maxX, part.maxZ, size);
+    for (let cz = Math.floor(a / FOOTPRINT_CELLS); cz <= Math.floor(b / FOOTPRINT_CELLS); cz++) {
+        for (let cx = a % FOOTPRINT_CELLS; cx <= b % FOOTPRINT_CELLS; cx++) {
+            const key = cz * FOOTPRINT_CELLS + cx;
+            const list = cells.get(key);
+            if (list) list.push(part);
+            else cells.set(key, [part]);
+        }
+    }
+}
+
+/** Even-odd point-in-polygon over every ring (holes are outside). */
+function insideRings(rings, x, z) {
+    let inside = false;
+    for (const ring of rings) {
+        for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
+            const xi = ring[i], zi = ring[i + 1], xj = ring[j], zj = ring[j + 1];
+            if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) inside = !inside;
+        }
+    }
+    return inside;
+}
+
 /** `featureStyle` functions that already threw (reported once each). */
 const failingFeatureStyles = new WeakSet();
 
 /**
- * Calls a user `featureStyle` function. If it throws, the building keeps its
- * default style and the error is reported once: a bug in the callback never
- * breaks the tiles.
+ * Calls the `featureStyle` function of a feature's type. If it throws, the
+ * feature keeps its default style and the error is reported once: a bug in the
+ * callback never breaks the tiles.
+ * @param {import('../utils/TileFeatureCollector.js').CollectedFeature} item
  */
-function callFeatureStyle(featureStyle, feature) {
+function featureOverrides({ style, feature, sourceLayer, type }) {
+    const featureStyle = style.featureStyle;
     try {
-        return featureStyle(feature);
+        return featureStyle({ id: feature.id, properties: feature.properties, sourceLayer, type });
     } catch (err) {
         if (!failingFeatureStyles.has(featureStyle)) {
             failingFeatureStyles.add(featureStyle);
-            console.error('ThreeGeoPlay: buildingLayer.featureStyle threw; the buildings it failed on keep their default style', err);
+            console.error(`ThreeGeoPlay: the featureStyle of '${type}' threw; the features it failed on keep their default style`, err);
         }
         return null;
     }
+}
+
+let warnedNotMaterial = false;
+
+/** A `featureStyle` material override, if it is one. */
+function asMaterial(value) {
+    if (value === undefined || value === null) return null;
+    if (value instanceof THREE.Material) return value;
+    if (!warnedNotMaterial) {
+        warnedNotMaterial = true;
+        console.warn('ThreeGeoPlay: featureStyle returned a material that is not a THREE.Material (is three.js imported twice?); it is ignored');
+    }
+    return null;
+}
+
+/** Materials already reported for ignoring `featureStyle` colours. */
+const colorIgnored = new WeakSet();
+
+function warnColorIgnored(material) {
+    if (colorIgnored.has(material)) return;
+    colorIgnored.add(material);
+    console.warn('ThreeGeoPlay: featureStyle returned a building color, but the building material has vertexColors = false, so it is ignored. Create the material with { vertexColors: true }.');
 }
 
 function scaled(points, scale) {

@@ -8,6 +8,9 @@ import { Tile }                               from './Tile.js';
 import { MeshBatches }                        from './MeshBatches.js';
 import { drawWithoutDepthWrite }              from './drawHooks.js';
 
+/** Missing tiles in a row, with none found, after which the tile URL is reported as wrong. */
+const MISSING_TILES_TO_REPORT = 8;
+
 /** Maximum number of tile downloads in flight. */
 const MAX_CONCURRENT_FETCHES = 16;
 
@@ -136,6 +139,10 @@ export class TileManager {
 
     #pending = { reset: true, origin: true, placement: true, needed: true, borders: false, restyle: false, ground: false };
     #warnedStatuses = new Set();
+    /** Tiles downloaded with data / refused, since the source was set: spots a wrong tile URL. */
+    #tilesFound   = 0;
+    #tilesRefused = 0;
+    #reportedRefusal = false;
     #destroyed = false;
 
     /** @type {(type: 'sourceload'|'sourceerror'|'tileload'|'tileunload', detail: Object) => void} */
@@ -240,6 +247,27 @@ export class TileManager {
             if (record.state === State.READY) tiles.push(record.tile.info);
         }
         return tiles;
+    }
+
+    /**
+     * Height of the buildings at a map-space position (see {@link ThreeGeoPlay#getHeightAt}).
+     * @param {number} x
+     * @param {number} z
+     * @returns {number} Top of the highest building part there, 0 on open ground or where no tile is loaded.
+     */
+    heightAt(x, z) {
+        const cfg    = this.#config;
+        const size   = cfg.tileWorldSize;
+        const offset = cfg.worldOriginOffset;
+        const fx = this.#originFX + (x - offset.x) / size;
+        const fy = this.#originFY + (z - offset.z) / size;
+        const tx = Math.floor(fx);
+        const ty = Math.floor(fy);
+        const record = this.#tiles.get(`${tx}/${ty}`);
+        if (!record || record.state !== State.READY) return 0;
+        const frame = record.tile.size;
+        const top   = record.tile.heightAt((fx - tx) * frame, (fy - ty) * frame);
+        return top === null ? 0 : top * (size / frame);
     }
 
     /**
@@ -473,6 +501,8 @@ export class TileManager {
     #resolveSource() {
         const { tileUrl, accessToken } = this.#config;
         this.#sourceKey = `${tileUrl}\n${accessToken}`;
+        this.#tilesFound = this.#tilesRefused = 0;
+        this.#reportedRefusal = false;
         this.#sourceRequest?.abort();
         this.#sourceRequest = null;
         if (this.#sourceRetry !== null) clearTimeout(this.#sourceRetry);
@@ -556,13 +586,17 @@ export class TileManager {
             if (!this.#isCurrent(record)) return;
 
             if (result.status === 'ok') {
+                this.#tilesFound++;
                 record.tile  = new Tile(result.payload);
                 record.tile.object3D.layers.mask = this.#root.layers.mask;
                 record.state = State.LOADED;
                 this.#enqueueBuild(record);
             } else {
                 record.state = State.EMPTY;
-                if (result.status === 'unavailable') this.#warnUnavailable(result.httpStatus, url);
+                if (result.status === 'unavailable') {
+                    this.#warnUnavailable(result.httpStatus, url);
+                    this.#checkRefusals(result.httpStatus, url);
+                }
             }
         } catch (err) {
             if (err?.name === 'AbortError' || !this.#isCurrent(record)) return;
@@ -591,6 +625,24 @@ export class TileManager {
             this.#activeFetches--;
             if (!this.#destroyed) this.#drainFetchQueue();
         }
+    }
+
+    /**
+     * Tells the application (`sourceerror`) when the tile URL is clearly wrong:
+     * access refused (401 / 403), or the first tiles all missing (404 …) while
+     * none was found — rather than letting the area look merely empty.
+     */
+    #checkRefusals(status, url) {
+        this.#tilesRefused++;
+        if (this.#reportedRefusal || this.#tilesFound > 0) return;
+        const denied = status === 401 || status === 403;
+        if (!denied && this.#tilesRefused < MISSING_TILES_TO_REPORT) return;
+        this.#reportedRefusal = true;
+        const message = denied
+            ? `ThreeGeoPlay: the tile provider refused access (HTTP ${status}) for ${redactToken(url)}: check the API key / access token.`
+            : `ThreeGeoPlay: none of the first ${this.#tilesRefused} tiles exists (HTTP ${status}, e.g. ${redactToken(url)}): check tileUrl and zoomLevel.`;
+        const error = Object.assign(new Error(message), { permanent: true, httpStatus: status });
+        this.#emit('sourceerror', { error, willRetry: false });
     }
 
     #warnUnavailable(status, url) {

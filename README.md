@@ -30,8 +30,10 @@ ThreeGeoPlay is a JavaScript library that fetches [Vector Tiles (MVT/PBF)](https
 ## Installation
 
 ```bash
-npm i lm-three-geo-play
+npm i lm-three-geo-play three
 ```
+
+Three.js is a peer dependency: the library uses your copy (so your materials and objects mix freely with the map) and never bundles its own. The package is ES modules only and ships its TypeScript types.
 
 ---
 
@@ -42,8 +44,10 @@ import * as THREE from 'three';
 import { ThreeGeoPlay } from 'lm-three-geo-play';
 
 const scene    = new THREE.Scene();
-const camera   = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 10000);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const camera   = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 20000);
+camera.position.set(0, 400, 600);
+camera.lookAt(0, 0, 0);
+const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true }); // stencil: clean transparent buildings
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
@@ -51,9 +55,10 @@ const geo = new ThreeGeoPlay(scene, camera, renderer, {
   tileUrl:        'https://tiles.openfreemap.org/planet',   // free OpenMapTiles source (TileJSON)
   originLatLon:   { lat: 41.9028, lon: 12.4964 },           // Rome
   zoomLevel:      14,
-  tileWorldSize:  50,
-  renderDistance: 6,
+  unitsPerMeter:  1,                                        // one world unit = one metre
+  renderDistance: 4,
 });
+geo.addEventListener('sourceerror', ({ error }) => console.error(error.message));
 
 geo.start(); // adds the map to the scene (see geo.getMapGroup())
 
@@ -92,8 +97,32 @@ style.buildingLayer.isVisible = true;  // false to hide all buildings
 style.buildingLayer.height    = 1;     // vertical exaggeration: 1 = true scale
 ```
 
-Each type exposes `material`, `isVisible`, `Y` (height of the layer), `renderingOrder`, `castShadow` and `receiveShadow`; line types (roads, waterways) also have `outlineMaterial`, `lineWidth`, `outlineWidth` and `jointSegments`.
-A layer's `isVisible` is a master switch that keeps per-type settings; use `setVisibleAll(v)` to change every type at once.
+Each type exposes `material`, `isVisible`, `Y` (height of the layer), `renderingOrder`, `castShadow`, `receiveShadow` and `featureStyle`; `visible` and `renderOrder` are aliases named like their Three.js counterparts. Line types (roads, waterways) also have `outlineMaterial`, `lineWidthMeters` / `outlineWidthMeters` (in metres), `lineWidth` / `outlineWidth` (relative to a zoom-18 tile, used when the metre values are `null`) and `jointSegments`.
+A layer's `isVisible` is a master switch that keeps per-type settings; `setVisibleAll(v)`, `setAllMaterials(material)` and, for line layers, `setLineWidthAll(w)` / `setOutlineWidthAll(w)` change every type at once.
+
+```js
+style.transportationLayer.primary.lineWidthMeters = 14;   // 14 m wide, whatever the zoom level
+style.waterwayLayer.river.lineWidthMeters         = 30;
+```
+
+**Themes.** `MapStyle.dark()` is a ready-made night style; `style.clone()` makes an independent copy (materials included) to derive variants:
+
+```js
+import { MapStyle } from 'lm-three-geo-play';
+
+const night = MapStyle.dark();
+night.transportationLayer.primary.material.color.set(0x7fd4ff);
+geo.setMapStyle(night);
+```
+
+**Per-feature styling.** Any type can take a `featureStyle` function, called with `{ id, properties, sourceLayer, type }` for each feature: return `{ visible: false }` to skip it, `{ material }` (and `{ outlineMaterial }` for lines) to draw it differently — buildings also accept `color`, `height` and `minHeight` (see below). Assign it again, or call `style.refresh()`, when the answer changes.
+
+```js
+const highlight = new THREE.MeshBasicMaterial({ color: 0x00c2ff });
+style.transportationLayer.primary.featureStyle = ({ properties }) =>
+  properties.name === 'Via del Corso' ? { material: highlight } : null;
+style.transportationLayer.path.featureStyle = ({ properties }) => (properties.name ? null : { visible: false });
+```
 
 Materials are used exactly as you configure them: ThreeGeoPlay never changes their settings, so you can share them with your own objects.
 
@@ -153,6 +182,16 @@ geo.getMapGroup().layers.set(2);             // e.g. keep the map out of a refle
 geo.start();
 ```
 
+**Scale and heights.** Set `unitsPerMeter: 1` (MapConfig) to work in metres: the tile size follows the zoom level and the origin latitude so distances and heights are true to scale around the origin. `geo.getUnitsPerMeter()` gives the current scale whatever the setting, and `geo.getHeightAt(x, z)` the top of the building at a point (0 on open ground) — from the same footprints and heights that are drawn, cheap enough for every frame:
+
+```js
+const { x, z } = geo.latLonToWorld(41.8902, 12.4922);        // the Colosseum
+marker.position.set(x, geo.getHeightAt(x, z), z);            // on top of its walls
+marker.scale.setScalar(5 * geo.getUnitsPerMeter());          // 5 m tall, at any scale
+
+player.position.y = Math.max(player.position.y, geo.getHeightAt(player.position.x, player.position.z));
+```
+
 **Picking.** `pickFeature(raycaster)` returns what is seen along a ray — the building, road, park… — with its style layer and type, the vector tile properties, the intersection and its outline. Flat layers are stacked by `renderingOrder`, not by height, so use it rather than the nearest intersection (`getFeatureAt(intersection)` works on intersections of your own raycasts).
 
 ```js
@@ -177,7 +216,7 @@ geo.addEventListener('tileload', ({ tile }) => {
 geo.addEventListener('tileunload', ({ tile }) => tile.object3D.clear());   // dispose your resources here
 ```
 
-**Data-driven buildings.** `buildingLayer.featureStyle` is called for every building with `{ id, properties, sourceLayer, type }` and may return `{ color, height, minHeight, visible }` (heights in metres, `color` needs a `vertexColors` material). Assign it again, or call `style.refresh()`, when the answer changes:
+**Data-driven buildings.** `buildingLayer.featureStyle` is called for every building with `{ id, properties, sourceLayer, type }` and may return `{ color, height, minHeight, visible, material }` (heights in metres; `color` needs a `vertexColors` material — ThreeGeoPlay warns once otherwise). Assign it again, or call `style.refresh()`, when the answer changes:
 
 ```js
 let selected = null;
@@ -229,7 +268,7 @@ World coordinates stay stable while following: only the loaded area moves.
 
 ```js
 geo.moveMapOriginToPosition(x, z);         // load tiles around a world position (switches to MANUAL)
-geo.moveMapOriginToLatLon(48.8566, 2.3522); // put Paris at the world origin (switches to MANUAL)
+geo.moveMapOriginToLatLon(48.8566, 2.3522); // put Paris at the world origin (in follow mode, move the target there)
 
 const { x, z } = geo.latLonToWorld(41.8902, 12.4922); // Colosseum → world position
 marker.position.set(x, 0, z);
@@ -251,7 +290,8 @@ Set them in the constructor options, with `config.set({ … })`, or one by one o
 | `tileSchema` | `TileSchema.AUTO`, `OPENMAPTILES`, `MAPBOX` or a custom function | `AUTO` |
 | `originLatLon` | `{ lat, lon }` placed at the world origin | Rome |
 | `zoomLevel` | Integer zoom level — must be served by your provider (OpenMapTiles providers usually stop at 14, Mapbox at 16) | `18` |
-| `tileWorldSize` | World units per tile (changing it rescales loaded tiles) | `1` |
+| `unitsPerMeter` | World units per metre (e.g. `1` for a scene in metres); when set, `tileWorldSize` follows from it | `null` |
+| `tileWorldSize` | World units per tile (changing it rescales loaded tiles; setting it clears `unitsPerMeter`) | `1` |
 | `renderDistance` | Tiles loaded around the center | `4` |
 | `tileLayout` | `TileLayout.CIRCULAR` or `TileLayout.GRID` | `CIRCULAR` |
 | `worldOriginOffset` | `{ x, z }` world position of `originLatLon` | `{ x: 0, z: 0 }` |
@@ -261,6 +301,18 @@ Set them in the constructor options, with `config.set({ … })`, or one by one o
 | `occludeBelowGround` | The map ground hides what is below it | `true` |
 
 Invalid values and unknown option names throw an `Error`. `originLatLon` and `worldOriginOffset` are frozen objects: assign a new object to change them. (`pbfTileProviderZXYurl` still works as a deprecated alias of `tileUrl`.)
+
+**When tiles do not load**, listen to `sourceerror`: it fires when a TileJSON / style URL cannot be read, when the provider refuses access (HTTP 401 / 403: check the key or token) and when none of the first tiles exists (usually a wrong `tileUrl` template or a `zoomLevel` the provider does not serve).
+
+---
+
+## Migrating from 1.x
+
+- Install `three` next to the library: it is a peer dependency and is no longer bundled (1.x bundled its own copy, which rejected your materials).
+- `tileUrl` replaces `pbfTileProviderZXYurl` (still accepted).
+- Buildings are opaque and shaded by default; give the building material `transparent: true` and `opacity` for glass (create the renderer with `stencil: true`).
+- `moveMapOriginToLatLon()` no longer switches to `ViewMode.MANUAL`: in follow mode the map keeps following its target.
+- Materials are used as given: ThreeGeoPlay no longer changes their `depthTest`, `depthWrite` or `transparent`.
 
 ---
 

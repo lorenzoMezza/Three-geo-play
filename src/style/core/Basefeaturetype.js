@@ -32,6 +32,9 @@ export class BaseFeatureType {
     /** @type {boolean} */
     #receiveShadow = false;
 
+    /** @type {Function|null} */
+    #featureStyle = null;
+
     /** @type {number} */
     #stamp = 0;
 
@@ -138,6 +141,71 @@ export class BaseFeatureType {
             console.warn('ThreeGeoPlay: it is recommended to use values below 0 for the rendering order of the map parts');
         }
         this.#renderingOrder = num;
+        this._touch();
+    }
+
+    /**
+     * Copies the settings of another type of the same kind (used by
+     * {@link MapStyle#clone}).
+     * @param {BaseFeatureType} source
+     * @param {(material: THREE.Material|null) => THREE.Material|null} copyMaterial
+     * @protected
+     */
+    _copyFrom(source, copyMaterial) {
+        this.#material       = copyMaterial(source.material);
+        this.#Y              = source.Y;
+        this.#renderingOrder = source.renderingOrder;
+        this.#isVisible      = source.isVisible;
+        this.#castShadow     = source.castShadow;
+        this.#receiveShadow  = source.receiveShadow;
+        this.#featureStyle   = source.featureStyle;
+        this._touch();
+    }
+
+    // ── Three.js-style aliases ──────────────────────────────────────────────
+
+    /**
+     * Alias of {@link isVisible}, named like `THREE.Object3D#visible`.
+     * @type {boolean}
+     */
+    get visible()  { return this.isVisible; }
+    set visible(v) { this.isVisible = v; }
+
+    /**
+     * Alias of {@link renderingOrder}, named like `THREE.Object3D#renderOrder`.
+     * @type {number}
+     */
+    get renderOrder()    { return this.renderingOrder; }
+    set renderOrder(num) { this.renderingOrder = num; }
+
+    // ── per-feature styling ──────────────────────────────────────────────────
+
+    /**
+     * Data-driven styling: a function called for every feature of this type in
+     * the tiles, returning overrides — or nothing to keep the type's settings:
+     *  - `visible: false` skips the feature;
+     *  - `material` (and, for lines, `outlineMaterial`) draws it with another material;
+     *  - buildings also accept `color`, `height` and `minHeight` (see {@link BuildingLayer}).
+     *
+     * It receives `{ id, properties, sourceLayer, type }` (the vector tile
+     * feature). Assign it again — or call {@link MapStyle#refresh} — when what
+     * it returns changes, to apply it to the tiles on screen. A function that
+     * throws is reported once and the features keep their default style.
+     *
+     * @type {((feature: { id: number, properties: Record<string, unknown>, sourceLayer: string, type: string }) => Object | null | undefined) | null}
+     *
+     * @example
+     * // Highlight one road, hide footpaths without a name
+     * roads.primary.featureStyle = ({ id }) => (id === selectedId ? { material: highlight } : null);
+     * roads.path.featureStyle    = ({ properties }) => (properties.name ? null : { visible: false });
+     */
+    get featureStyle()      { return this.#featureStyle; }
+    set featureStyle(value) {
+        if (value !== null && value !== undefined && typeof value !== 'function') {
+            console.warn('ThreeGeoPlay: featureStyle must be a function or null');
+            return;
+        }
+        this.#featureStyle = value ?? null;
         this._touch();
     }
 

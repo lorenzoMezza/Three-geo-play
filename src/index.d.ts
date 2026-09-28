@@ -144,16 +144,34 @@ export interface PickedFeature extends MapFeature {
     intersection: THREE.Intersection;
 }
 
+/** The vector tile feature passed to a `featureStyle` function. */
+export interface StyledFeature {
+    id: number;
+    properties: Record<string, string | number | boolean>;
+    /** Layer of the vector tile. */
+    sourceLayer: string;
+    /** Style type name the feature was matched to (`'primary'`, `'park'`, `'building'`, …). */
+    type: string;
+}
+
+/** Per-feature overrides returned by a `featureStyle` function. */
+export interface FeatureStyleOverrides {
+    /** `false` skips the feature. */
+    visible?: boolean;
+    /** Draws the feature with another material. */
+    material?: THREE.Material;
+    /** Lines: draws the outline with another material. */
+    outlineMaterial?: THREE.Material;
+}
+
 /** Per-building overrides returned by `BuildingLayer.featureStyle`. */
-export interface BuildingFeatureStyle {
-    /** Tint multiplied into the building colour (needs a `vertexColors` material). */
+export interface BuildingFeatureStyle extends FeatureStyleOverrides {
+    /** Tint multiplied into the building colour (needs a `vertexColors` material; a warning tells otherwise). */
     color?: THREE.ColorRepresentation;
     /** Height in metres instead of the OSM one. */
     height?: number;
     /** Base height in metres instead of the OSM one. */
     minHeight?: number;
-    /** `false` skips the building. */
-    visible?: boolean;
 }
 
 // ─── Feature types ────────────────────────────────────────────────────────────
@@ -192,6 +210,17 @@ export declare class BaseFeatureType {
      * with the default unlit map materials, ground shadows come from `MapStyle.shadowLayer`.
      */
     receiveShadow: boolean;
+    /**
+     * Data-driven styling: called for every feature of this type, returns overrides (or nothing).
+     * Assign it again, or call `MapStyle.refresh()`, when what it returns changes.
+     * @example
+     * roads.primary.featureStyle = ({ id }) => (id === selectedId ? { material: highlight } : null);
+     */
+    featureStyle: ((feature: StyledFeature) => FeatureStyleOverrides | null | undefined | void) | null;
+    /** Alias of `isVisible`, named like `THREE.Object3D.visible`. */
+    visible: boolean;
+    /** Alias of `renderingOrder`, named like `THREE.Object3D.renderOrder`. */
+    renderOrder: number;
     setVisible(v: boolean): void;
 }
 
@@ -208,10 +237,17 @@ export declare class WaterType extends BaseFeatureType {}
 export declare class LineFeatureType extends BaseFeatureType {
     /** Material of the outline drawn around the line. */
     outlineMaterial: THREE.Material | null;
-    /** Full line width, relative to one tile at zoom 18 (constant real-world width across zooms). Must be ≥ 0. */
+    /**
+     * Full line width, relative to one tile at zoom 18 (constant real-world width across zooms;
+     * about 150 m × cos(latitude) per unit). Prefer `lineWidthMeters`. Must be ≥ 0.
+     */
     lineWidth: number;
     /** Extra width drawn with `outlineMaterial` (same units as `lineWidth`). `0` disables it; `null` restores the default. */
     outlineWidth: number;
+    /** Full line width in metres; when set (not `null`) it replaces `lineWidth`. Default `null`. */
+    lineWidthMeters: number | null;
+    /** Outline width in metres; when set (not `null`) it replaces `outlineWidth`. Default `null`. */
+    outlineWidthMeters: number | null;
     /** Points used to round caps and joints. Minimum 6. */
     jointSegments: number;
     /** Restores the outline width the type was created with. */
@@ -233,6 +269,8 @@ export declare class BaseLayer<TName extends string, TType extends BaseFeatureTy
      * each type follows its own `isVisible` (per-type settings are preserved).
      */
     isVisible: boolean;
+    /** Alias of `isVisible`, named like `THREE.Object3D.visible`. */
+    visible: boolean;
     getTypeByName(name: TName | (string & {})): TType | null;
     setAllMaterials(material: THREE.Material): void;
     /** Sets `isVisible` on every type of the layer. */
@@ -287,7 +325,7 @@ export declare class BuildingLayer extends BaseFeatureType {
      * @example
      * buildings.featureStyle = ({ properties }) => ({ color: properties.render_height > 30 ? 0xb0c4ff : 0xffffff });
      */
-    featureStyle: ((feature: { id: number; properties: Record<string, string | number | boolean>; sourceLayer: string; type: string }) => BuildingFeatureStyle | null | undefined | void) | null;
+    featureStyle: ((feature: StyledFeature) => BuildingFeatureStyle | null | undefined | void) | null;
     /** Reserved for future roof/detail rendering. Currently has no effect. */
     allowDetails: boolean;
     getTypeByName(name: string): this;
@@ -489,6 +527,8 @@ export declare class TransportationLayer extends BaseLayer<TransportClassName, R
     setAllMaterials(material: THREE.Material | null, outlineMaterial?: THREE.Material): void;
     setOutlineWidthAll(width: number): void;
     resetOutlineWidthAll(): void;
+    /** Sets `lineWidth` on every transportation type. */
+    setLineWidthAll(width: number): void;
     setJointSegmentsAll(segments: number): void;
     setAllRenderOrder(order: number): void;
     /** Alias for the `isVisible` setter. */
@@ -534,6 +574,10 @@ export declare class MapStyle {
      * `featureStyle` function that depends on your own state.
      */
     refresh(): void;
+    /** An independent copy: every setting, materials cloned (shared materials stay shared in the copy). */
+    clone(): MapStyle;
+    /** A ready-made night style (dark ground, glowing arterial roads, unlit shaded buildings). */
+    static dark(): MapStyle;
 }
 
 // ─── MapConfig ────────────────────────────────────────────────────────────────
@@ -592,6 +636,11 @@ export declare class MapConfig {
      * plane writes the ground depth before anything else is drawn. `false` lets you see through it.
      */
     occludeBelowGround: boolean;
+    /**
+     * World units per metre, e.g. `1` for a scene in metres. When set, `tileWorldSize` is derived
+     * from it (and follows zoom / origin changes); setting `tileWorldSize` clears it. Default `null`.
+     */
+    unitsPerMeter: number | null;
     /** Scale factor relative to zoom level 18. */
     readonly zoomScaleFactor: number;
     /** True if any property has changed since the last flush. */
@@ -623,6 +672,7 @@ export interface MapConfigOptions {
     mapStyle?: MapStyle;
     showTileBorders?: boolean;
     occludeBelowGround?: boolean;
+    unitsPerMeter?: number | null;
     followUpdateInterval?: number;
     /** @deprecated Use `tileUrl`. */
     pbfTileProviderZXYurl?: string;
@@ -676,8 +726,8 @@ export declare class ThreeGeoPlay extends THREE.EventDispatcher<ThreeGeoPlayEven
     setFollowTarget(target: THREE.Object3D): void;
 
     /**
-     * Places the given coordinates at the world origin and centers the map there.
-     * Switches to `MANUAL` mode if needed.
+     * Places the given coordinates at the world origin. In `MANUAL` mode the loaded area is centered
+     * there; in `FOLLOW_TARGET` mode the map keeps following its target (the mode never changes).
      */
     moveMapOriginToLatLon(lat: number, lon: number): void;
 
@@ -689,6 +739,16 @@ export declare class ThreeGeoPlay extends THREE.EventDispatcher<ThreeGeoPlayEven
 
     /** Converts geographic coordinates to world-space X/Z with the current config. */
     latLonToWorld(lat: number, lon: number): WorldPosition;
+
+    /** World units per metre at the map origin (`MapConfig.unitsPerMeter`, or derived from `tileWorldSize`). */
+    getUnitsPerMeter(): number;
+
+    /**
+     * Top of the highest building part at a map-space position, 0 on open ground or where no tile is
+     * loaded. Follows what is drawn (exaggeration, `featureStyle`); cheap enough for every frame.
+     * @example marker.position.set(x, geoPlay.getHeightAt(x, z), z);
+     */
+    getHeightAt(x: number, z: number): number;
 
     /** Converts a world-space X/Z position to geographic coordinates with the current config. */
     worldToLatLon(x: number, z: number): { lat: number; lon: number };

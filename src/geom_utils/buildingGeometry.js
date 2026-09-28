@@ -197,18 +197,18 @@ export class BuildingGeometryBuilder {
 
 /**
  * Brightness factor in `[1 - amount, 1]` that gives neighbouring roofs slightly
- * different tones. It is derived from the heights of the part — stable across
- * tiles and rebuilds, and equal for overlapping parts of the same height, whose
- * coinciding roofs therefore never flicker.
+ * different tones. It depends only on the height of the roof — stable across
+ * tiles and rebuilds, and equal for every part whose roof is at that height,
+ * so roofs that coincide (overlapping parts, duplicated footprints) always have
+ * the same colour and never flicker.
  *
- * @param {number} height    - Metres.
- * @param {number} minHeight - Metres.
- * @param {number} amount    - 0–1.
+ * @param {number} height - Metres.
+ * @param {number} amount - 0–1.
  * @returns {number}
  */
-export function roofVariation(height, minHeight, amount) {
+export function roofVariation(height, amount) {
     if (amount === 0) return 1;
-    let h = Math.imul(Math.round(height * 10) | 0, 0x9E3779B1) ^ Math.imul((Math.round(minHeight * 10) | 0) + 1, 0x85EBCA77);
+    let h = Math.imul(Math.round(height * 10) | 0, 0x9E3779B1);
     h ^= h >>> 15;
     h  = Math.imul(h, 0x2C1B3C6D);
     h ^= h >>> 12;

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { MapStyle }                   from './style/MapStyle.js';
 import { MapConfig, ViewMode }        from './config/MapConfig.js';
 import { TileManager }                from './map/TileManager.js';
-import { geoToTileXYFloat, tileXYToGeo } from './geo_utils/projection.js';
+import { geoToTileXYFloat, tileXYToGeo, tileSizeInMeters } from './geo_utils/projection.js';
 
 const now = typeof performance !== 'undefined' ? () => performance.now() : () => Date.now();
 
@@ -225,9 +225,10 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
 
     /**
      * Places the given geographic coordinates at the world origin
-     * ({@link MapConfig#worldOriginOffset}) and centers the loaded area there.
-     * If the current mode is {@link ViewMode.FOLLOW_TARGET} it is automatically
-     * switched to {@link ViewMode.MANUAL}.
+     * ({@link MapConfig#worldOriginOffset}). In {@link ViewMode.MANUAL} mode the
+     * loaded area is centered there; in {@link ViewMode.FOLLOW_TARGET} mode the
+     * map keeps following its target — move the target to the origin to look
+     * at the new place (the view mode is never changed).
      *
      * @param {number} lat - Latitude in degrees (−90 … 90).
      * @param {number} lon - Longitude in degrees (−180 … 180).
@@ -238,11 +239,11 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
      */
     moveMapOriginToLatLon(lat, lon) {
         this.#validateLatLon(lat, lon);
-        this.#ensureManualMode();
-
         this.#mapConfig.originLatLon = { lat, lon };
-        this.#manualCenter = null;
-        this.#tileManager?.setCenterPosition(null);
+        if (this.#mapConfig.viewMode === ViewMode.MANUAL) {
+            this.#manualCenter = null;
+            this.#tileManager?.setCenterPosition(null);
+        }
     }
 
     /**
@@ -286,6 +287,36 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
             x: (tx - ox) * tileWorldSize + worldOriginOffset.x,
             z: (ty - oy) * tileWorldSize + worldOriginOffset.z,
         };
+    }
+
+    /**
+     * World units per metre at the map origin — `MapConfig.unitsPerMeter` when
+     * set, otherwise derived from `tileWorldSize`. Use it to size your objects:
+     * `mesh.scale.setScalar(2 * geoPlay.getUnitsPerMeter())` for a 2 m object.
+     * @returns {number}
+     */
+    getUnitsPerMeter() {
+        const { originLatLon, zoomLevel, tileWorldSize } = this.#mapConfig;
+        return tileWorldSize / tileSizeInMeters(originLatLon.lat, zoomLevel);
+    }
+
+    /**
+     * Height of the buildings at a map-space position: the top of the highest
+     * building part covering it, or 0 on open ground and where no tile is
+     * loaded yet. It follows what is drawn (height exaggeration, `featureStyle`,
+     * hidden buildings) and costs a few point-in-polygon tests: fine every frame,
+     * e.g. to keep a character on the roofs or a drone above them.
+     *
+     * @param {number} x - X in the map group's space.
+     * @param {number} z - Z in the map group's space.
+     * @returns {number}
+     *
+     * @example
+     * const { x, z } = geoPlay.latLonToWorld(41.8902, 12.4922);
+     * marker.position.set(x, geoPlay.getHeightAt(x, z), z); // on top of the Colosseum
+     */
+    getHeightAt(x, z) {
+        return this.#tileManager?.heightAt(x, z) ?? 0;
     }
 
     /**

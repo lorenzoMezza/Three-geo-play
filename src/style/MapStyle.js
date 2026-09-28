@@ -7,6 +7,10 @@ import { WaterwayLayer } from './layers/Waterwaylayer.js';
 import { BackgroundLayer } from './layers/Backgroundlayer.js';
 import { ShadowLayer } from './layers/Shadowlayer.js';
 import { nextStyleStamp } from './core/styleStamp.js';
+import { applyDarkPreset } from './presets.js';
+
+/** Style layer names, in the order they are copied by {@link MapStyle#clone}. */
+const LAYER_NAMES = ['background', 'waterway', 'water', 'landcover', 'landuse', 'building', 'transportation', 'shadow'];
 
 /**
  * Top-level style container for a ThreeGeoPlay map.
@@ -84,6 +88,44 @@ export class MapStyle {
             this.#backgroundLayer._stamp,
             this.#shadowLayer._stamp,
         );
+    }
+
+    /**
+     * A ready-made night style: dark ground, glowing arterial roads, deep water
+     * and unlit buildings shaded by the library. Customise it like any style.
+     * @returns {MapStyle}
+     *
+     * @example
+     * geoPlay.setMapStyle(MapStyle.dark());
+     */
+    static dark() {
+        const style = new MapStyle();
+        applyDarkPreset(style);
+        return style;
+    }
+
+    /**
+     * An independent copy of this style: every setting of every layer and
+     * type, with the materials cloned too (types that share a material still
+     * share its copy). Handy to derive a variant without touching the original.
+     * @returns {MapStyle}
+     *
+     * @example
+     * const night = geoPlay.getMapStyle().clone();
+     * night.backgroundLayer.material.color.set(0x111111);
+     */
+    clone() {
+        const copy = new MapStyle();
+        const materials = new Map();
+        const copyMaterial = material => {
+            if (!material) return material ?? null;
+            if (!materials.has(material)) materials.set(material, material.clone());
+            return materials.get(material);
+        };
+        for (const name of LAYER_NAMES) {
+            copy.getStyleLayerByName(name)._copyFrom(this.getStyleLayerByName(name), copyMaterial);
+        }
+        return copy;
     }
 
     /**

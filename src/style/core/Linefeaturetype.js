@@ -28,6 +28,12 @@ export class LineFeatureType extends BaseFeatureType {
     /** @type {number} */
     #jointSegments = 8;
 
+    /** @type {number|null} */
+    #lineWidthMeters = null;
+
+    /** @type {number|null} */
+    #outlineWidthMeters = null;
+
     /**
      * @param {THREE.Material}      material
      * @param {THREE.Material}      outlineMaterial
@@ -43,6 +49,17 @@ export class LineFeatureType extends BaseFeatureType {
         this.#lineWidth           = lineWidth;
         this.#outlineWidth        = outlineWidth;
         this.#defaultOutlineWidth = outlineWidth;
+    }
+
+    /** @protected */
+    _copyFrom(source, copyMaterial) {
+        super._copyFrom(source, copyMaterial);
+        this.#outlineMaterial     = copyMaterial(source.outlineMaterial);
+        this.#lineWidth           = source.lineWidth;
+        this.#outlineWidth        = source.outlineWidth;
+        this.#jointSegments       = source.jointSegments;
+        this.#lineWidthMeters     = source.lineWidthMeters;
+        this.#outlineWidthMeters  = source.outlineWidthMeters;
     }
 
     // ── outlineMaterial ──────────────────────────────────────────────────────
@@ -66,7 +83,9 @@ export class LineFeatureType extends BaseFeatureType {
 
     /**
      * Full width of the rendered line, relative to one tile at zoom 18
-     * (so roads keep the same real-world width at every zoom level). Must be ≥ 0.
+     * (so roads keep the same real-world width at every zoom level; about
+     * 150 m × cos(latitude) — use {@link lineWidthMeters} to give metres).
+     * Must be ≥ 0.
      * @type {number}
      */
     get lineWidth() { return this.#lineWidth; }
@@ -76,6 +95,36 @@ export class LineFeatureType extends BaseFeatureType {
             return;
         }
         this.#lineWidth = v;
+        this._touch();
+    }
+
+    /**
+     * Full width of the line in metres, e.g. `12` for a 12 m wide road. When
+     * set (not `null`) it replaces {@link lineWidth}. Default `null`.
+     * @type {number|null}
+     */
+    get lineWidthMeters() { return this.#lineWidthMeters; }
+    set lineWidthMeters(v) {
+        if (v !== null && (typeof v !== 'number' || !Number.isFinite(v) || v < 0)) {
+            console.warn(`ThreeGeoPlay: lineWidthMeters must be a non-negative number or null (received: ${v})`);
+            return;
+        }
+        this.#lineWidthMeters = v;
+        this._touch();
+    }
+
+    /**
+     * Extra outline width in metres (added around the line). When set (not
+     * `null`) it replaces {@link outlineWidth}. Default `null`.
+     * @type {number|null}
+     */
+    get outlineWidthMeters() { return this.#outlineWidthMeters; }
+    set outlineWidthMeters(v) {
+        if (v !== null && (typeof v !== 'number' || !Number.isFinite(v) || v < 0)) {
+            console.warn(`ThreeGeoPlay: outlineWidthMeters must be a non-negative number or null (received: ${v})`);
+            return;
+        }
+        this.#outlineWidthMeters = v;
         this._touch();
     }
 
