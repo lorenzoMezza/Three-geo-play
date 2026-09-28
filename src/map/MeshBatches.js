@@ -105,8 +105,6 @@ class Batch {
     #freedVertices = 0;
     #count = 0;
     #onEmpty;
-    /** @type {THREE.Material|null} */
-    #prepass;
 
     constructor(descriptor, root, onEmpty) {
         this.#onEmpty = onEmpty;
@@ -116,7 +114,7 @@ class Batch {
         mesh.frustumCulled          = false;  // culled per tile instead
         mesh.perObjectFrustumCulled = true;
         mesh.sortObjects            = descriptor.kind === 'building';  // front to back (early depth rejection)
-        this.#prepass = setUpDraw(mesh, descriptor);
+        setUpDraw(mesh, descriptor);
         root.add(mesh);
         this.mesh = mesh;
     }
@@ -146,7 +144,6 @@ class Batch {
     dispose() {
         this.mesh.removeFromParent();
         this.mesh.dispose();
-        this.#prepass?.dispose();
         this.#onEmpty();
     }
 
@@ -177,14 +174,12 @@ class Batch {
 class MeshHandle {
 
     #mesh;
-    /** @type {THREE.Material|null} */
-    #prepass;
 
     constructor(descriptor, geometry, tileObject) {
         geometry.computeBoundingSphere();
         const mesh = new THREE.Mesh(geometry, descriptor.material);
         mesh.matrixAutoUpdate = false;
-        this.#prepass = setUpDraw(mesh, descriptor);
+        setUpDraw(mesh, descriptor);
         tileObject.add(mesh);
         this.#mesh = mesh;
     }
@@ -197,7 +192,6 @@ class MeshHandle {
         if (!this.#mesh) return;
         this.#mesh.removeFromParent();
         this.#mesh.geometry.dispose();
-        this.#prepass?.dispose();
         this.#mesh = null;
     }
 }
@@ -209,17 +203,16 @@ class MeshHandle {
  *
  * @param {THREE.Mesh} mesh
  * @param {BatchDescriptor} descriptor
- * @returns {THREE.Material|null} The depth pre-pass material to dispose with the mesh, if any.
  */
 function setUpDraw(mesh, { kind, renderOrder, castShadow, receiveShadow, depthPrepass }) {
     mesh.userData.kind = kind;
     mesh.castShadow    = !!castShadow;
     mesh.receiveShadow = !!receiveShadow;
     if (kind === 'building') {
-        return depthPrepass ? drawWithDepthPrepass(mesh) : null;
+        if (depthPrepass) drawWithDepthPrepass(mesh);
+        return;
     }
     // Flat map layers are stacked by render order instead of depth.
     mesh.renderOrder = renderOrder;
     drawWithoutDepthWrite(mesh);
-    return null;
 }
