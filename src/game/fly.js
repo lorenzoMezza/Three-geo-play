@@ -21,9 +21,9 @@ const RINGS = [
 ]
 const RING_RADIUS = 26
 
-const CRUISE = 70, BOOST = 150, TRAIL_POINTS = 90
+const CRUISE = 70, BOOST = 150, BRAKE = 38, TRAIL_POINTS = 90
 
-const UP = ['KeyS', 'ArrowDown'], DOWN = ['KeyW', 'ArrowUp']
+const UP = ['KeyW', 'ArrowUp'], DOWN = ['KeyS', 'ArrowDown']
 const LEFT = ['KeyA', 'ArrowLeft'], RIGHT = ['KeyD', 'ArrowRight']
 
 /**
@@ -148,7 +148,7 @@ export function createFlyMode(app) {
             highlightRings()
             hud.show({
                 title: 'Fly · Grand tour of Rome',
-                help: ['W / S · dive · climb', 'A / D · bank and turn', 'Shift · boost', 'Fly through the glowing rings — the arrow shows the next one'],
+                help: ['W / S · climb · dive', 'A / D · bank and turn', 'Shift · boost   Q · slow down', 'Fly through the glowing rings — the arrow shows the next one'],
             })
             hud.flash('Fly through the rings above the landmarks', 3)
         },
@@ -172,11 +172,12 @@ export function createFlyMode(app) {
             const turn  = keys.axis(RIGHT, LEFT)
             const climb = keys.axis(DOWN, UP)
             const boost = keys.held('ShiftLeft', 'ShiftRight')
+            const brake = keys.held('KeyQ')
             state.roll  = THREE.MathUtils.damp(state.roll, turn * 0.85, 3.5, dt)
-            state.yaw  += state.roll * 0.75 * dt
+            state.yaw  += state.roll * (brake ? 1 : 0.75) * dt   // slower is tighter
             state.pitch = THREE.MathUtils.clamp(
                 THREE.MathUtils.damp(state.pitch, climb * 0.55, 2.2, dt), -0.8, 0.8)
-            state.speed = THREE.MathUtils.damp(state.speed, boost ? BOOST : CRUISE, 1.5, dt)
+            state.speed = THREE.MathUtils.damp(state.speed, boost ? BOOST : brake ? BRAKE : CRUISE, 1.5, dt)
 
             plane.object.rotation.set(state.pitch, state.yaw, state.roll, 'YXZ')
             fwd.set(0, 0, -1).applyQuaternion(plane.object.quaternion)

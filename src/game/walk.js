@@ -15,6 +15,12 @@ const SUPER_JUMP = 27     // added by a full charge: about 25 m high
 const CHARGE_S   = 0.9
 const STEP       = 0.7    // highest step climbed without jumping
 const RADIUS     = 0.35
+const TURN_SPEED = 2.8    // rad/s
+const TAP_S      = 0.15   // a shorter press of Space is a plain hop
+
+/** Moves `angle` towards `target` along the shortest way round. */
+const dampAngle = (angle, target, lambda, dt) =>
+    angle + Math.atan2(Math.sin(target - angle), Math.cos(target - angle)) * (1 - Math.exp(-lambda * dt))
 
 const PAINTS = [0xff4f8b, 0x2ad4c6, 0xb4f03c, 0xffc233, 0x9b7bff, 0xff7a2b]
 
@@ -79,11 +85,11 @@ export function createWalkMode(app) {
             app.startGame({ spawn: SPAWN, renderDistance: 3, follow: player, sun: { azimuth: 250, elevation: 24 } })
             lighting.shadowArea = 70
             player.position.set(0, collider.heightAt(0, 0), 0)
-            player.rotation.y = 0
+            player.rotation.y = Math.PI / 2   // facing the basilica (west)
             grounded = true
             charge   = 0
             velocity.set(0, 0, 0)
-            view.yaw = 0
+            view.yaw = player.rotation.y
             score = 0
             painted.clear()
             app.scene.add(player)
@@ -97,7 +103,7 @@ export function createWalkMode(app) {
             hud.show({
                 title: 'Walk · Rome from the ground',
                 help: [
-                    'WASD / arrows · move',
+                    'W / S · forward · back   A / D · turn',
                     'Shift · run',
                     'Space · jump — hold it for a super jump onto the roofs',
                     'E · paint the building in front of you',
@@ -122,23 +128,17 @@ export function createWalkMode(app) {
         update(dt) {
             const pos = player.position
 
-            // ── move, relative to the camera ─────────────────────────────────
+            // ── move: A/D turn the runner, W/S go forward / back ──────────────
             const forward = keys.axis(BACK, FORWARD)
-            const side    = keys.axis(LEFT, RIGHT)
-            const fx = -Math.sin(view.yaw), fz = -Math.cos(view.yaw)
-            let dx = fx * forward + Math.cos(view.yaw) * side
-            let dz = fz * forward - Math.sin(view.yaw) * side
-            const length = Math.hypot(dx, dz)
-            const speed  = length > 0 ? (keys.held('ShiftLeft', 'ShiftRight') ? RUN_SPEED : WALK_SPEED) : 0
-            if (length > 0) { dx /= length; dz /= length }
+            const turn    = keys.axis(RIGHT, LEFT)
+            const running = keys.held('ShiftLeft', 'ShiftRight')
+            player.rotation.y += turn * TURN_SPEED * (running ? 0.8 : 1) * dt
+            const speed = forward > 0 ? (running ? RUN_SPEED : WALK_SPEED) : forward < 0 ? -WALK_SPEED * 0.6 : 0
+            const dx = -Math.sin(player.rotation.y), dz = -Math.cos(player.rotation.y)
             const grip = 1 - Math.exp(-dt * (grounded ? 12 : 2.5))
             velocity.x += (dx * speed - velocity.x) * grip
             velocity.z += (dz * speed - velocity.z) * grip
-            if (length > 0) {
-                const heading = Math.atan2(-dx, -dz)
-                const turn = Math.atan2(Math.sin(heading - player.rotation.y), Math.cos(heading - player.rotation.y))
-                player.rotation.y += turn * (1 - Math.exp(-dt * 12))
-            }
+            const moving = forward !== 0 || turn !== 0
 
             // Walls stop the runner; low steps are climbed. Slide along walls.
             const free = (x, z) => {
@@ -156,6 +156,7 @@ export function createWalkMode(app) {
             // ── jump: tap for a hop, hold to charge a super jump ──────────────
             if (grounded && keys.held('Space')) charge = Math.min(1, charge + dt / CHARGE_S)
             if (grounded && charge > 0 && (!keys.held('Space') || charge >= 1)) {
+                if (charge < TAP_S / CHARGE_S) charge = 0   // a tap: plain hop
                 velocity.y = JUMP + SUPER_JUMP * charge * charge
                 if (charge > 0.6) hud.flash('Super jump!', 0.8)
                 grounded = false
@@ -189,7 +190,9 @@ export function createWalkMode(app) {
                 if (score % 10 === 0) hud.flash(`${score} coins!`, 1)
             }
 
-            // ── third-person camera, kept above the roofs ─────────────────────
+            // ── third-person camera behind the runner, kept above the roofs ───
+            // Dragging orbits it; it swings back behind the runner (fast while moving).
+            if (!dragging) view.yaw = dampAngle(view.yaw, player.rotation.y, moving ? 6 : 1.5, dt)
             target.set(pos.x, pos.y + 1.4, pos.z)
             const cp = Math.cos(view.pitch)
             const desired = new THREE.Vector3(
