@@ -1,21 +1,16 @@
 {
-  "name": "playground",
-  "version": "1.0.0",
-  "main": "index.js",
+  "name": "three-geo-play-playground",
+  "private": true,
+  "type": "module",
+  "description": "Try and debug ThreeGeoPlay from its source",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "vite",
     "build": "vite build"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "dependencies": {
+    "three": "^0.183.2"
+  },
   "devDependencies": {
     "vite": "^7.3.1"
-  },
-  "dependencies": {
-    "three": "^0.183.2",
-    "three-csg-ts": "^3.2.0"
   }
 }

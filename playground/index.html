@@ -1,8 +1,16 @@
 <!DOCTYPE html>
-<html>
-  <head><title>GeoPlay Playground</title></head>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ThreeGeoPlay playground</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #d8d3a5; font: 12px/1.4 system-ui, sans-serif; }
+      #help { position: fixed; right: 10px; bottom: 10px; padding: 6px 9px; border-radius: 6px; background: rgba(0, 0, 0, 0.6); color: #fff; pointer-events: none; }
+    </style>
+  </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="/main.js"></script>
+    <div id="help">B borders · N night · G glass · S shadows · click: log feature · console: geo, style, config</div>
+    <script type="module" src="./main.js"></script>
   </body>
 </html>
