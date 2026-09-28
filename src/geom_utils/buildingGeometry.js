@@ -113,17 +113,18 @@ export class BuildingGeometryBuilder {
      * @param {number} min - Clip boundary (extent coordinates).
      * @param {number} max
      * @param {BuildingShading} shading
-     * @param {{ r: number, g: number, b: number }} roof - Roof colour (linear RGB).
+     * @param {{ r: number, g: number, b: number }} roof  - Roof colour (linear RGB).
+     * @param {{ r: number, g: number, b: number }} walls - Tint of the walls and underside (linear RGB).
      * @param {boolean} raised - Whether the part starts above the ground and needs an underside.
      */
-    appendBuilding(polygon, scale, yBase, yTop, min, max, shading, roof, raised) {
+    appendBuilding(polygon, scale, yBase, yTop, min, max, shading, roof, walls, raised) {
         const { flat, indices } = triangulate(polygon);
         this.#appendCap(flat, indices, scale, yTop, 1, roof.r, roof.g, roof.b);
         if (!(yTop > yBase)) return;
 
         if (raised) {
             const shade = shading.face(0, -1, 0) * shading.occlusion(yBase);
-            this.#appendCap(flat, indices, scale, yBase, -1, shade, shade, shade);
+            this.#appendCap(flat, indices, scale, yBase, -1, shade * walls.r, shade * walls.g, shade * walls.b);
         }
 
         const aoTop = shading.aoTop;
@@ -145,10 +146,10 @@ export class BuildingGeometryBuilder {
                 const shade = shading.face(nx, 0, nz);
 
                 if (split) {
-                    this.#appendWall(x0, z0, x1, z1, nx, nz, yBase, aoTop, shade, shading);
-                    this.#appendWall(x0, z0, x1, z1, nx, nz, aoTop, yTop, shade, shading);
+                    this.#appendWall(x0, z0, x1, z1, nx, nz, yBase, aoTop, shade, shading, walls);
+                    this.#appendWall(x0, z0, x1, z1, nx, nz, aoTop, yTop, shade, shading, walls);
                 } else {
-                    this.#appendWall(x0, z0, x1, z1, nx, nz, yBase, yTop, shade, shading);
+                    this.#appendWall(x0, z0, x1, z1, nx, nz, yBase, yTop, shade, shading, walls);
                 }
             }
         }
@@ -169,16 +170,16 @@ export class BuildingGeometryBuilder {
     }
 
     /** One wall quad between `ya` and `yb`. */
-    #appendWall(x0, z0, x1, z1, nx, nz, ya, yb, shade, shading) {
+    #appendWall(x0, z0, x1, z1, nx, nz, ya, yb, shade, shading, { r, g, b }) {
         this.#reserve(6);
         const low  = shade * shading.occlusion(ya);
         const high = shade * shading.occlusion(yb);
-        this.#vertex(x0, yb, z0, nx, 0, nz, high, high, high);
-        this.#vertex(x1, ya, z1, nx, 0, nz, low,  low,  low);
-        this.#vertex(x0, ya, z0, nx, 0, nz, low,  low,  low);
-        this.#vertex(x0, yb, z0, nx, 0, nz, high, high, high);
-        this.#vertex(x1, yb, z1, nx, 0, nz, high, high, high);
-        this.#vertex(x1, ya, z1, nx, 0, nz, low,  low,  low);
+        this.#vertex(x0, yb, z0, nx, 0, nz, high * r, high * g, high * b);
+        this.#vertex(x1, ya, z1, nx, 0, nz, low * r,  low * g,  low * b);
+        this.#vertex(x0, ya, z0, nx, 0, nz, low * r,  low * g,  low * b);
+        this.#vertex(x0, yb, z0, nx, 0, nz, high * r, high * g, high * b);
+        this.#vertex(x1, yb, z1, nx, 0, nz, high * r, high * g, high * b);
+        this.#vertex(x1, ya, z1, nx, 0, nz, low * r,  low * g,  low * b);
     }
 
     #reserve(vertices) {

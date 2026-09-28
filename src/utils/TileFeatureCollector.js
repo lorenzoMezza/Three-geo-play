@@ -5,6 +5,9 @@ import { TileSchema, resolveSchema, schemaReadsLayer } from './tileSchemas.js';
 /**
  * @typedef {Object} CollectedFeature
  * @property {import('../style/core/Basefeaturetype.js').BaseFeatureType} style
+ * @property {string} layer       - Style layer name (`'building'`, `'transportation'`, …).
+ * @property {string} type        - Name of the style type the feature was matched to.
+ * @property {string} sourceLayer - Layer of the vector tile the feature comes from.
  * @property {import('./vectorTile.js').VectorTileFeature} feature
  * @property {number} extent - Extent of the layer the feature belongs to.
  * @property {boolean} ramp  - Link road (lines only).
@@ -67,19 +70,23 @@ export class TileFeatureCollector {
 
                 const match = classify(layer.name, feature.properties);
                 if (!match) continue;
-                const style = this.#styleFor(match);
-                if (!style) continue;
+                const found = this.#styleFor(match);
+                if (!found) continue;
+                const { style, type } = found;
                 const isLineStyle = style instanceof LineFeatureType;
+                const item = { style, layer: match.layer, type, sourceLayer: layer.name, feature, extent, ramp: false };
 
                 if (isLine) {
-                    if (isLineStyle) lines.push({ style, feature, extent, ramp: !!match.ramp });
+                    if (!isLineStyle) continue;
+                    item.ramp = !!match.ramp;
+                    lines.push(item);
                 } else if (match.layer === 'building') {
                     // Outlines flagged `hide_3d` are kept on purpose: in OSM their
                     // `building:part`s often cover only a fraction of the building
                     // (e.g. just a dome or a tower), so skipping them leaves holes.
-                    buildings.push({ style, feature, extent, ramp: false });
+                    buildings.push(item);
                 } else if (!isLineStyle) {
-                    polygons.push({ style, feature, extent, ramp: false });
+                    polygons.push(item);
                 }
             }
         }
@@ -90,21 +97,23 @@ export class TileFeatureCollector {
     /**
      * Visible style of a schema match; the first type name the layer knows wins.
      * @param {import('./tileSchemas.js').SchemaMatch} match
+     * @returns {{ style: import('../style/core/Basefeaturetype.js').BaseFeatureType, type: string } | null}
      */
     #styleFor(match) {
         const styleLayer = this.#mapStyle.getStyleLayerByName(match.layer);
         if (!styleLayer || !styleLayer.isVisible) return null;
 
         let style = null;
-        if (Array.isArray(match.type)) {
-            for (const name of match.type) {
-                if (typeof name === 'string' && (style = styleLayer.getTypeByName(name))) break;
+        let type  = null;
+        const names = Array.isArray(match.type) ? match.type : [match.type];
+        for (const name of names) {
+            if (typeof name === 'string' && (style = styleLayer.getTypeByName(name))) {
+                type = name;
+                break;
             }
-        } else if (typeof match.type === 'string') {
-            style = styleLayer.getTypeByName(match.type);
         }
 
         if (!style || !style.isVisible || !style.material) return null;
-        return style;
+        return { style, type };
     }
 }

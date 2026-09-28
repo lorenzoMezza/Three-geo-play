@@ -64,6 +64,9 @@ export class BuildingLayer extends BaseFeatureType {
     /** @type {boolean} */
     #depthPrepass = true;
 
+    /** @type {Function|null} */
+    #featureStyle = null;
+
     /**
      * @param {THREE.Material} [material] - Fill material. Defaults to an opaque,
      *   unlit warm white using the baked shading.
@@ -189,6 +192,39 @@ export class BuildingLayer extends BaseFeatureType {
     get depthPrepass()      { return this.#depthPrepass; }
     set depthPrepass(value) {
         this.#depthPrepass = !!value;
+        this._touch();
+    }
+
+    /**
+     * Data-driven styling: a function called for every building (and building
+     * part) of the tiles, returning overrides — or nothing to keep the defaults:
+     *  - `color`: tint multiplied into the building's colour (any
+     *    `THREE.ColorRepresentation`; needs a `vertexColors` material);
+     *  - `height` / `minHeight`: heights in metres instead of the OSM ones;
+     *  - `visible: false`: skip the building.
+     *
+     * It receives `{ id, properties, sourceLayer, type }` (the feature of the
+     * vector tile). Assign it again — or call {@link MapStyle#refresh} — when
+     * what it returns changes, to apply it to the tiles on screen.
+     * Overlapping parts given different colours show the overlap (as in the data).
+     *
+     * @type {((feature: { id: number, properties: Record<string, unknown>, sourceLayer: string, type: string }) =>
+     *   { color?: THREE.ColorRepresentation, height?: number, minHeight?: number, visible?: boolean } | null | undefined) | null}
+     *
+     * @example
+     * // Colour by height, hide one building
+     * buildings.featureStyle = ({ id, properties }) => {
+     *   if (id === hiddenId) return { visible: false };
+     *   return { color: properties.render_height > 30 ? 0xb0c4ff : 0xffffff };
+     * };
+     */
+    get featureStyle()      { return this.#featureStyle; }
+    set featureStyle(value) {
+        if (value !== null && value !== undefined && typeof value !== 'function') {
+            console.warn('ThreeGeoPlay: building featureStyle must be a function or null');
+            return;
+        }
+        this.#featureStyle = value ?? null;
         this._touch();
     }
 

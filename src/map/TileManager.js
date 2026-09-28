@@ -128,6 +128,9 @@ export class TileManager {
     /** `vertexColors` of the building material the loaded buildings were built for. */
     #buildingVertexColors;
 
+    /** Layers mask last applied to the map objects (they follow the root's). */
+    #layersMask;
+
     /** @type {MeshBatches} */
     #batches;
 
@@ -135,18 +138,19 @@ export class TileManager {
     #warnedStatuses = new Set();
     #destroyed = false;
 
-    /** @type {(type: 'sourceload'|'sourceerror', detail: Object) => void} */
+    /** @type {(type: 'sourceload'|'sourceerror'|'tileload'|'tileunload', detail: Object) => void} */
     #notify;
 
     /**
      * @param {import('../config/MapConfig.js').MapConfig} mapConfig
      * @param {THREE.Object3D} root - Parent object of all map meshes.
-     * @param {(type: 'sourceload'|'sourceerror', detail: Object) => void} [notify] - Tile source events.
+     * @param {(type: 'sourceload'|'sourceerror'|'tileload'|'tileunload', detail: Object) => void} [notify] - Map events.
      */
     constructor(mapConfig, root, notify = () => {}) {
         this.#config  = mapConfig;
         this.#root    = root;
         this.#notify  = notify;
+        this.#layersMask = root.layers.mask;
         this.#batches = new MeshBatches(root);
         this.#buildingVertexColors = !!mapConfig.mapStyle.buildingLayer.material?.vertexColors;
         this.#groundDepthMaterial.name = 'ThreeGeoPlayGroundDepth';
@@ -169,16 +173,21 @@ export class TileManager {
 
     /**
      * Loading progress of the tiles in the current render area.
-     * @returns {{ total: number, ready: number, empty: number, loading: number, failed: number }}
+     * @returns {{ total: number, ready: number, empty: number, loading: number, failed: number, rebuilding: number }}
      */
     get stats() {
-        const stats = { total: this.#tiles.size, ready: 0, empty: 0, loading: 0, failed: 0 };
+        const stats = { total: this.#tiles.size, ready: 0, empty: 0, loading: 0, failed: 0, rebuilding: 0 };
         for (const record of this.#tiles.values()) {
-            if (record.state === State.READY)       stats.ready++;
+            if (record.state === State.READY) {
+                stats.ready++;
+                if (record.buildPending) stats.rebuilding++;
+            }
             else if (record.state === State.EMPTY)  stats.empty++;
             else if (record.state === State.FAILED) stats.failed++;
             else                                    stats.loading++;
         }
+        // A style change is applied on the next update: count it as pending already.
+        if (this.#pending.restyle) stats.rebuilding = stats.ready;
         return stats;
     }
 
@@ -219,6 +228,39 @@ export class TileManager {
      */
     restyle() {
         this.#pending.restyle = true;
+    }
+
+    /**
+     * Public descriptions of the tiles on screen.
+     * @returns {Object[]}
+     */
+    get tiles() {
+        const tiles = [];
+        for (const record of this.#tiles.values()) {
+            if (record.state === State.READY) tiles.push(record.tile.info);
+        }
+        return tiles;
+    }
+
+    /**
+     * The map feature drawn at a raycast intersection (see {@link ThreeGeoPlay#getFeatureAt}).
+     * @param {THREE.Intersection} intersection
+     * @returns {Object|null}
+     */
+    featureAt(intersection) {
+        const hit = this.#batches.featureAt(intersection);
+        if (!hit || !hit.tile.info) return null;
+        const { feature: item, tile } = hit;
+        return {
+            layer:       item.layer,
+            type:        item.type,
+            style:       item.style,
+            sourceLayer: item.sourceLayer,
+            id:          item.feature.id,
+            properties:  item.feature.properties,
+            tile:        tile.info,
+            getGeometry: () => tile.featureGeometry(item.feature, item.extent),
+        };
     }
 
     // ─── Frame update ─────────────────────────────────────────────────────────
@@ -292,6 +334,14 @@ export class TileManager {
         }
 
         if (p.restyle || p.placement || p.needed || p.ground || centerMoved) this.#syncGround();
+
+        // Map objects follow the layers of the map group (THREE.Layers are not inherited).
+        if (this.#root.layers.mask !== this.#layersMask) {
+            this.#layersMask = this.#root.layers.mask;
+            this.#root.traverse(object => {
+                if (object !== this.#root && object.userData.threeGeoPlay) object.layers.mask = this.#layersMask;
+            });
+        }
 
         p.reset = p.origin = p.placement = p.needed = p.borders = p.restyle = p.ground = false;
     }
@@ -386,6 +436,7 @@ export class TileManager {
             clearTimeout(record.retryTimer);
             record.retryTimer = null;
         }
+        if (record.tile?.info) this.#emit('tileunload', { tile: record.tile.info });
         record.tile?.dispose();
         record.tile = null;
         record.buildPending = false;
@@ -431,7 +482,7 @@ export class TileManager {
         if (isTileTemplate(tileUrl)) {
             this.#source = templateSource(tileUrl, accessToken);
             this.#checkZoomRange();
-            this.#notify('sourceload', { source: this.source });
+            this.#emit('sourceload', { source: this.source });
             return;
         }
 
@@ -443,12 +494,12 @@ export class TileManager {
             this.#sourceAttempts = 0;
             this.#source         = source;
             this.#checkZoomRange();
-            this.#notify('sourceload', { source: this.source });
+            this.#emit('sourceload', { source: this.source });
             this.#drainFetchQueue();
         }, err => {
             if (this.#sourceRequest !== request || this.#destroyed || err?.name === 'AbortError') return;
             this.#sourceRequest = null;
-            this.#notify('sourceerror', { error: err, willRetry: !err?.permanent });
+            this.#emit('sourceerror', { error: err, willRetry: !err?.permanent });
             if (err?.permanent) {
                 console.error(err.message);
                 return;
@@ -506,6 +557,7 @@ export class TileManager {
 
             if (result.status === 'ok') {
                 record.tile  = new Tile(result.payload);
+                record.tile.object3D.layers.mask = this.#root.layers.mask;
                 record.state = State.LOADED;
                 this.#enqueueBuild(record);
             } else {
@@ -582,12 +634,15 @@ export class TileManager {
             if (!record.buildPending || !this.#isCurrent(record) || !record.tile) continue;
             record.buildPending = false;
 
+            let appeared = false;
             try {
                 record.tile.build(ctx);
                 this.#place(record);
                 if (record.state !== State.READY) {
                     this.#root.add(record.tile.object3D);
                     record.state = State.READY;
+                    record.tile.info = this.#describeTile(record);
+                    appeared = true;
                 }
             } catch (err) {
                 console.error(`ThreeGeoPlay: tile ${this.#zoom}/${record.tx}/${record.ty} could not be built`, err);
@@ -595,10 +650,38 @@ export class TileManager {
                 record.tile  = null;
                 record.state = State.FAILED;
             }
+            if (appeared) this.#emit('tileload', { tile: record.tile.info });
         }
 
         if (this.#buildQueue.length > 0) this.#buildTimer = setTimeout(this.#runBuildSlice, 0);
     };
+
+    /**
+     * Dispatches an event. A listener that throws is reported but never breaks
+     * the map (tile building, downloads and clean-up go on).
+     */
+    #emit(type, detail) {
+        try {
+            this.#notify(type, detail);
+        } catch (err) {
+            console.error(`ThreeGeoPlay: a '${type}' event listener threw`, err);
+        }
+    }
+
+    /** Public description of a tile, handed to the user. */
+    #describeTile(record) {
+        const tile      = record.tile;
+        const tileCount = 2 ** this.#zoom;
+        return Object.freeze({
+            x:             ((record.tx % tileCount) + tileCount) % tileCount,
+            y:             record.ty,
+            zoom:          this.#zoom,
+            object3D:      tile.object3D,
+            size:          tile.size,
+            unitsPerMeter: tile.unitsPerMeter,
+            getFeatures:   sourceLayer => tile.getFeatures(sourceLayer),
+        });
+    }
 
     // ─── Ground ───────────────────────────────────────────────────────────────
 
@@ -663,6 +746,8 @@ export class TileManager {
             mesh = new THREE.Mesh(this.#planeGeometry);
             mesh.name             = name;
             mesh.matrixAutoUpdate = false;
+            mesh.layers.mask      = this.#root.layers.mask;
+            mesh.userData.threeGeoPlay = true;
             if (flatLayer) drawWithoutDepthWrite(mesh);
             this.#root.add(mesh);
         }
