@@ -15,7 +15,8 @@ installRadialFog()
 // ─── Scene ──────────────────────────────────────────────────────────────────
 const scene = new THREE.Scene()
 
-const renderer = new THREE.WebGLRenderer({ antialias: true })
+// The stencil buffer lets transparent buildings be blended once per pixel (see the library README).
+const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true })
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 renderer.setSize(window.innerWidth, window.innerHeight)
 document.getElementById('viewport').append(renderer.domElement)
