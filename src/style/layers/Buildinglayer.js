@@ -178,8 +178,10 @@ export class BuildingLayer extends BaseFeatureType {
      * colour, so only the surface nearest to the camera is blended (default
      * `true`): walls behind and between buildings stay hidden, and objects
      * behind the buildings show through a single layer of "glass".
-     * Set it to `false` for plain Three.js blending of every face (e.g. with a
-     * custom shader that moves vertices). Has no effect on opaque materials.
+     * The depth pass reuses the material itself (colour writes off), so it
+     * matches the colour pass exactly — also with custom shaders — and never
+     * flickers. Set it to `false` for plain Three.js blending of every face.
+     * Has no effect on opaque materials.
      * @type {boolean}
      */
     get depthPrepass()      { return this.#depthPrepass; }

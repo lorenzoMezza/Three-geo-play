@@ -40,43 +40,49 @@ export function drawWithoutDepthWrite(object) {
  * behind it stay hidden — a clean "glass" look instead of a tangle of faces.
  * Opaque materials are drawn normally (one pass).
  *
+ * The depth pass uses the object's own material with colour writes switched
+ * off (for that draw only): both passes run the very same shader, so the depth
+ * they compute is bit-identical and the colour pass never fails the depth test
+ * by a rounding error — which would make the glass flicker as the camera moves.
+ * It also stays exact with shaders that move vertices.
+ *
  * Both passes run where three.js draws the transparent material, i.e. after
  * every opaque object: opaque objects behind the buildings stay visible
  * through them.
  *
  * @param {THREE.Mesh} object - A `THREE.Mesh` or `THREE.BatchedMesh`.
- * @returns {THREE.Material} The depth pass material (dispose it with the object).
  */
 export function drawWithDepthPrepass(object) {
     const beforeRender = object.onBeforeRender;
-    const prepass = new THREE.MeshBasicMaterial({ colorWrite: false, fog: false });
-    prepass.name = 'ThreeGeoPlayDepthPrepass';
 
     object.onBeforeRender = function (renderer, scene, camera, geometry, material, group) {
         beforeRender.call(this, renderer, scene, camera, geometry, material, group);
         if (!material.transparent) return;
 
-        copyDepthState(prepass, material);
+        const { colorWrite, depthWrite, side } = material;
+        // Two-sided transparent materials are drawn back faces first, then front
+        // faces, each with a single-sided shader: write the depth with the front one.
+        const twoPass = side === THREE.DoubleSide && !material.forceSinglePass;
+        material.colorWrite = false;
+        material.depthWrite = true;
+        if (twoPass) {
+            material.side        = THREE.FrontSide;
+            material.needsUpdate = true;
+        }
+
         // three.js updates these right after onBeforeRender; the depth pass needs them now.
         this.modelViewMatrix.multiplyMatrices(camera.matrixWorldInverse, this.matrixWorld);
         this.normalMatrix.getNormalMatrix(this.modelViewMatrix);
-        renderer.renderBufferDirect(camera, scene, geometry, prepass, this, group);
+        renderer.renderBufferDirect(camera, scene, geometry, material, this, group);
+
+        material.colorWrite = colorWrite;
+        material.depthWrite = depthWrite;
+        if (twoPass) {
+            material.side        = side;
+            material.needsUpdate = true;
+        }
     };
     keepShadowCulling(object, beforeRender);
-    return prepass;
-}
-
-/** Makes the depth pass cover exactly what the colour pass draws. */
-function copyDepthState(prepass, material) {
-    prepass.side                = material.side;
-    prepass.wireframe           = material.wireframe;
-    prepass.depthTest           = material.depthTest;
-    prepass.depthFunc           = material.depthFunc;
-    prepass.clippingPlanes      = material.clippingPlanes;
-    prepass.clipIntersection    = material.clipIntersection;
-    prepass.polygonOffset       = material.polygonOffset;
-    prepass.polygonOffsetFactor = material.polygonOffsetFactor;
-    prepass.polygonOffsetUnits  = material.polygonOffsetUnits;
 }
 
 /**
