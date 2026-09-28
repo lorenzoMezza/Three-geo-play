@@ -87,6 +87,17 @@ export class MapStyle {
     }
 
     /**
+     * Applies the style again to the tiles on screen, on the next
+     * {@link ThreeGeoPlay#onFrameUpdate}. Changes made through the style's
+     * properties are detected by themselves; call this after changing
+     * something they cannot see — e.g. the result of a
+     * {@link BuildingLayer#featureStyle} function that depends on your own state.
+     */
+    refresh() {
+        this.#stamp = nextStyleStamp();
+    }
+
+    /**
      * Retrieves a style layer by its internal OSM layer name.
      * @param {'background'|'waterway'|'water'|'landcover'|'landuse'|'building'|'transportation'|'shadow'} layerName
      * @returns {BackgroundLayer|WaterwayLayer|WaterLayer|LandCoverLayer|LandUseLayer|BuildingLayer|TransportationLayer|ShadowLayer|null}

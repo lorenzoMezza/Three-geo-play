@@ -82,6 +82,78 @@ export interface TileStats {
     loading: number;
     /** Tiles that gave up after retries. */
     failed: number;
+    /** Tiles on screen still waiting to be rebuilt after a style change (0 once it is applied). */
+    rebuilding: number;
+}
+
+/** Style layer names. */
+export type StyleLayerName = 'background' | 'waterway' | 'water' | 'landcover' | 'landuse' | 'building' | 'transportation' | 'shadow';
+
+/**
+ * A tile on screen (see `ThreeGeoPlay.getTiles()` and the `tileload` / `tileunload` events).
+ *
+ * `object3D` is the tile's group, child of the map group. Its local frame is fixed for the
+ * tile's life: the tile spans `[0, size]` on X and Z (north-west corner at the origin), the
+ * ground is at Y 0 and `unitsPerMeter` converts metres. Objects added to it follow the tile
+ * and leave the scene with it — dispose their resources on `tileunload`.
+ */
+export interface MapTile {
+    readonly x: number;
+    readonly y: number;
+    readonly zoom: number;
+    readonly object3D: THREE.Group;
+    /** Side of the tile in `object3D` units. */
+    readonly size: number;
+    /** `object3D` units per metre (heights included). */
+    readonly unitsPerMeter: number;
+    /** Decodes the features of the tile — every layer, also those not drawn — optionally of one layer only. */
+    getFeatures(sourceLayer?: string): TileFeature[];
+}
+
+/** A feature of a vector tile, geometry in the local frame of its `MapTile.object3D`. */
+export interface TileFeature {
+    /** Layer of the vector tile (`'building'`, `'poi'`, …). */
+    sourceLayer: string;
+    id: number;
+    type: 'point' | 'line' | 'polygon';
+    properties: Record<string, string | number | boolean>;
+    /** Parts (points, lines or polygon rings — exterior then holes) as flat `[x0, z0, x1, z1, …]` arrays. */
+    geometry: number[][];
+}
+
+/** A map feature found by `ThreeGeoPlay.getFeatureAt()` / `pickFeature()`. */
+export interface MapFeature {
+    /** Style layer it is drawn with. */
+    layer: StyleLayerName;
+    /** Style type name (`'primary'`, `'residential'`, `'building'`, …). */
+    type: string;
+    /** Style type object (e.g. `style.transportationLayer.primary`). */
+    style: BaseFeatureType;
+    /** Layer of the vector tile. */
+    sourceLayer: string;
+    id: number;
+    properties: Record<string, string | number | boolean>;
+    /** Tile the feature was hit in. */
+    tile: MapTile;
+    /** Outline in the tile's local frame, as in `TileFeature.geometry`. */
+    getGeometry(): number[][];
+}
+
+/** A feature picked along a ray, with the intersection. */
+export interface PickedFeature extends MapFeature {
+    intersection: THREE.Intersection;
+}
+
+/** Per-building overrides returned by `BuildingLayer.featureStyle`. */
+export interface BuildingFeatureStyle {
+    /** Tint multiplied into the building colour (needs a `vertexColors` material). */
+    color?: THREE.ColorRepresentation;
+    /** Height in metres instead of the OSM one. */
+    height?: number;
+    /** Base height in metres instead of the OSM one. */
+    minHeight?: number;
+    /** `false` skips the building. */
+    visible?: boolean;
 }
 
 // ─── Feature types ────────────────────────────────────────────────────────────
@@ -209,6 +281,13 @@ export declare class BuildingLayer extends BaseFeatureType {
      * bit `0x80`: create the renderer with `{ stencil: true }`. No effect on opaque materials.
      */
     depthPrepass: boolean;
+    /**
+     * Data-driven styling: called for every building of the tiles, returns overrides (or nothing).
+     * Assign it again, or call `MapStyle.refresh()`, when what it returns changes.
+     * @example
+     * buildings.featureStyle = ({ properties }) => ({ color: properties.render_height > 30 ? 0xb0c4ff : 0xffffff });
+     */
+    featureStyle: ((feature: { id: number; properties: Record<string, string | number | boolean>; sourceLayer: string; type: string }) => BuildingFeatureStyle | null | undefined | void) | null;
     /** Reserved for future roof/detail rendering. Currently has no effect. */
     allowDetails: boolean;
     getTypeByName(name: string): this;
@@ -419,8 +498,6 @@ export declare class TransportationLayer extends BaseLayer<TransportClassName, R
 
 // ─── MapStyle ─────────────────────────────────────────────────────────────────
 
-export type StyleLayerName = 'background' | 'waterway' | 'water' | 'landcover' | 'landuse' | 'building' | 'transportation' | 'shadow';
-
 /**
  * Top-level style container for a ThreeGeoPlay map.
  * Changes made after `start()` are applied to the loaded tiles on the next `onFrameUpdate()`.
@@ -451,6 +528,12 @@ export declare class MapStyle {
     getStyleLayerByName(layerName: 'transportation'): TransportationLayer;
     getStyleLayerByName(layerName: 'shadow'): ShadowLayer;
     getStyleLayerByName(layerName: string): BackgroundLayer | WaterwayLayer | WaterLayer | LandCoverLayer | LandUseLayer | BuildingLayer | TransportationLayer | ShadowLayer | null;
+    /**
+     * Applies the style again to the tiles on screen (next `onFrameUpdate()`). Property changes are
+     * detected by themselves; call it when something they cannot see changes, e.g. the result of a
+     * `featureStyle` function that depends on your own state.
+     */
+    refresh(): void;
 }
 
 // ─── MapConfig ────────────────────────────────────────────────────────────────
@@ -571,6 +654,10 @@ export interface ThreeGeoPlayEventMap {
     sourceload: { source: TileSource };
     /** The tile source could not be loaded (e.g. wrong access token); no retry for configuration errors. */
     sourceerror: { error: Error; willRetry: boolean };
+    /** A tile appeared on screen. */
+    tileload: { tile: MapTile };
+    /** A tile left the render area (or the map was destroyed / reloaded). */
+    tileunload: { tile: MapTile };
 }
 
 export declare class ThreeGeoPlay extends THREE.EventDispatcher<ThreeGeoPlayEventMap> {
@@ -633,8 +720,25 @@ export declare class ThreeGeoPlay extends THREE.EventDispatcher<ThreeGeoPlayEven
     /** Resolved tile source, including the attribution to display; `null` before `start()` / while loading (see the `sourceload` event). */
     getTileSource(): TileSource | null;
 
-    /** The group containing every map mesh (useful for raycasting or toggling visibility). */
+    /**
+     * The group containing every map mesh, added to the scene by `start()` unless you parented it
+     * yourself. Move, rotate, scale or re-parent it freely; its `layers` apply to every map mesh,
+     * `visible` and `renderOrder` work as for any group. Map objects have `userData.threeGeoPlay`.
+     * The API's world coordinates are in this group's space.
+     */
     getMapGroup(): THREE.Group;
+
+    /**
+     * The feature drawn at a raycast intersection with the map (`null` for ground planes and other objects).
+     * With flat layers the nearest intersection is not always the visible one: prefer `pickFeature()`.
+     */
+    getFeatureAt(intersection: THREE.Intersection): MapFeature | null;
+
+    /** The map feature seen along a ray (flat layers compete by render order, like on screen), or `null`. */
+    pickFeature(raycaster: THREE.Raycaster): PickedFeature | null;
+
+    /** The tiles on screen (also passed to the `tileload` / `tileunload` events). */
+    getTiles(): MapTile[];
 
     getScene(): THREE.Scene;
     getCamera(): THREE.Camera;

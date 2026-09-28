@@ -8,6 +8,12 @@ import { geoToTileXYFloat, tileXYToGeo } from './geo_utils/projection.js';
 const now = typeof performance !== 'undefined' ? () => performance.now() : () => Date.now();
 
 /**
+ * Flat layer intersections this close to the nearest one (relative to its
+ * distance) are on the same spot of the ground: the one drawn on top is picked.
+ */
+const FLAT_PICK_TOLERANCE = 0.01;
+
+/**
  * Main entry point for ThreeGeoPlay — a geographic map renderer built on Three.js.
  *
  * Instantiate once with your Three.js scene, camera and renderer, then call
@@ -15,9 +21,13 @@ const now = typeof performance !== 'undefined' ? () => performance.now() : () =>
  * {@link ThreeGeoPlay#onFrameUpdate} inside your animation loop to keep the map
  * in sync with the camera / follow-target.
  *
- * All map meshes live under a single `THREE.Group` (see {@link ThreeGeoPlay#getMapGroup}).
- * World coordinates used by the API are expressed in that group's space, which
- * is the scene's world space as long as the group is not transformed.
+ * All map meshes live under a single `THREE.Group` (see {@link ThreeGeoPlay#getMapGroup}),
+ * which is yours to place: parent it anywhere, move, rotate or scale it, give
+ * it `layers`, `visible` or a `renderOrder` for the whole map. The "world"
+ * coordinates of the API ({@link latLonToWorld}, {@link moveMapOriginToPosition},
+ * …) are expressed in that group's space — the scene's world space as long as
+ * the group is not transformed — while the follow target is tracked through
+ * its world position, whatever the transform.
  *
  * @example
  * const geoPlay = new ThreeGeoPlay(scene, camera, renderer, {
@@ -37,7 +47,9 @@ const now = typeof performance !== 'undefined' ? () => performance.now() : () =>
  * Events (`geoPlay.addEventListener(type, listener)`):
  *  - `sourceload`  — `{ source }`: the tile source is resolved (see {@link getTileSource});
  *  - `sourceerror` — `{ error, willRetry }`: the tile source could not be loaded
- *    (e.g. wrong access token); `willRetry` is false for configuration errors.
+ *    (e.g. wrong access token); `willRetry` is false for configuration errors;
+ *  - `tileload`    — `{ tile }`: a tile appeared on screen (see {@link getTiles});
+ *  - `tileunload`  — `{ tile }`: a tile left the render area and was removed.
  *
  * @class
  * @extends THREE.EventDispatcher
@@ -108,6 +120,7 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
 
         this.#mapGroup      = new THREE.Group();
         this.#mapGroup.name = 'ThreeGeoPlay';
+        this.#mapGroup.userData.threeGeoPlay = true;
 
         if (options) this.#mapConfig.set(options);
     }
@@ -152,12 +165,16 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
     }
 
     /**
-     * World X/Z position of the follow target.
+     * Position of the follow target in the map group's space (X/Z).
      * @returns {{ x: number, z: number }}
      * @private
      */
     #followTargetPosition() {
         const p = this.#followTarget.getWorldPosition(this.#tmpVec);
+        if (this.#mapGroup.parent) {
+            this.#mapGroup.updateWorldMatrix(true, false);
+            this.#mapGroup.worldToLocal(p);
+        }
         return { x: p.x, z: p.z };
     }
 
@@ -293,6 +310,7 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
     /**
      * Initialises the map, adds it to the scene and starts loading tiles.
      * Call this once, after configuring {@link MapConfig} and {@link MapStyle}.
+     * If you already added {@link getMapGroup} to an object of yours, it stays there.
      *
      * @throws {Error} If `tileUrl` has not been set.
      */
@@ -309,7 +327,7 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
             throw new Error("ThreeGeoPlay: MapConfig.tileUrl must be set before start()");
         }
 
-        this.#scene.add(this.#mapGroup);
+        if (!this.#mapGroup.parent) this.#scene.add(this.#mapGroup);
         const center = this.#mapConfig.viewMode === ViewMode.FOLLOW_TARGET
             ? this.#followTargetPosition()
             : this.#manualCenter;
@@ -423,16 +441,23 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
     /**
      * Loading progress of the tiles in the current render area: `ready` tiles are
      * on screen, `empty` ones have no data, `loading` ones are queued, downloading
-     * or being built, `failed` ones gave up after retries. All zero before {@link start}.
+     * or being built, `failed` ones gave up after retries. `rebuilding` counts the
+     * tiles on screen still waiting to be rebuilt after a style change (0 once
+     * the change is fully applied). All zero before {@link start}.
      *
-     * @returns {{ total: number, ready: number, empty: number, loading: number, failed: number }}
+     * @returns {{ total: number, ready: number, empty: number, loading: number, failed: number, rebuilding: number }}
      *
      * @example
      * const { total, loading } = geoPlay.getTileStats();
      * progress.textContent = loading ? `Loading ${total - loading}/${total}` : '';
      */
     getTileStats() {
-        return this.#tileManager?.stats ?? { total: 0, ready: 0, empty: 0, loading: 0, failed: 0 };
+        const stats = this.#tileManager?.stats;
+        if (!stats) return { total: 0, ready: 0, empty: 0, loading: 0, failed: 0, rebuilding: 0 };
+        // A style change not seen by onFrameUpdate yet will rebuild every tile.
+        const style = this.#mapConfig.mapStyle;
+        if (style !== this.#lastStyle || style._stamp !== this.#lastStyleStamp) stats.rebuilding = stats.ready;
+        return stats;
     }
 
     /**
@@ -450,12 +475,109 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
     }
 
     /**
-     * Returns the group containing every map mesh (added to the scene by {@link start}).
-     * Useful for raycasting against the map or toggling its visibility.
+     * Returns the group containing every map mesh (added to the scene by {@link start},
+     * unless you parented it yourself). Its `layers` are applied to every map mesh;
+     * `visible`, the transform and `renderOrder` work as for any Three.js group.
+     * Map objects carry `userData.threeGeoPlay = true`.
      * @returns {THREE.Group}
      */
     getMapGroup() {
         return this.#mapGroup;
+    }
+
+    /**
+     * The map feature drawn at a raycast intersection: which building, road, park…
+     * was hit. Returns `null` for other objects and for the ground planes.
+     *
+     * `layer` / `type` / `style` are the style layer, type name and type object
+     * the feature is drawn with; `sourceLayer`, `id` and `properties` come from
+     * the vector tile; `tile` is the tile it belongs to (see {@link getTiles}) and
+     * `getGeometry()` returns its outline in that tile's local frame.
+     *
+     * @param {THREE.Intersection} intersection - From `raycaster.intersectObject(geoPlay.getMapGroup(), true)`.
+     * @returns {Object|null}
+     *
+     * @example
+     * const hits = raycaster.intersectObject(geoPlay.getMapGroup(), true);
+     * const feature = hits.length ? geoPlay.getFeatureAt(hits[0]) : null;
+     * if (feature?.layer === 'building') console.log(feature.properties.render_height);
+     */
+    getFeatureAt(intersection) {
+        return this.#tileManager?.featureAt(intersection) ?? null;
+    }
+
+    /**
+     * The map feature seen along a ray: raycasts the map and returns what is
+     * drawn on top, or `null`. Prefer it to {@link getFeatureAt} on the nearest
+     * intersection: flat layers lie on (almost) the same plane and are stacked by
+     * `renderingOrder`, not by height, so the nearest flat intersection is not
+     * always the one you see (e.g. a park under a road).
+     *
+     * The result is the one of {@link getFeatureAt}, plus the `intersection`
+     * (with `point` and `distance`).
+     *
+     * @param {THREE.Raycaster} raycaster
+     * @returns {Object|null}
+     *
+     * @example
+     * raycaster.setFromCamera(pointer, camera);
+     * const feature = geoPlay.pickFeature(raycaster);
+     * if (feature) console.log(feature.layer, feature.type, feature.properties);
+     */
+    pickFeature(raycaster) {
+        if (!this.#tileManager) return null;
+        let best = null;
+        let bestHit = null;
+        for (const hit of raycaster.intersectObject(this.#mapGroup, true)) {
+            const feature = this.getFeatureAt(hit);
+            if (!feature) continue;   // ground planes, your own objects in tiles
+            const flat = hit.object.userData.kind !== 'building';
+            if (!best) {
+                best = feature;
+                bestHit = hit;
+                if (!flat) break;
+                continue;
+            }
+            // Only flat intersections on the same spot compete, by render order.
+            if (!flat || hit.distance - bestHit.distance > FLAT_PICK_TOLERANCE * bestHit.distance + 1e-6) break;
+            if (hit.object.renderOrder > bestHit.object.renderOrder) {
+                best = feature;
+                bestHit = hit;
+            }
+        }
+        return best ? { ...best, intersection: bestHit } : null;
+    }
+
+    /**
+     * The tiles on screen. Each tile is `{ x, y, zoom, object3D, size, unitsPerMeter, getFeatures(sourceLayer?) }`:
+     *  - `object3D` is the tile's group, child of the map group. Its local frame is
+     *    fixed for the tile's life: the tile spans `[0, size]` on X and Z, the ground
+     *    is at Y 0 and `unitsPerMeter` converts metres. Objects you add to it follow
+     *    the tile (moved and rescaled with the map) and leave the scene with it —
+     *    dispose their geometry and materials on `tileunload`.
+     *  - `getFeatures()` decodes every feature of the tile — including layers the
+     *    map does not draw (POIs, labels, …) — as `{ sourceLayer, id, type, properties, geometry }`,
+     *    `type` being `'point'`, `'line'` or `'polygon'` and `geometry` a list of parts
+     *    (or rings) as flat `[x0, z0, x1, z1, …]` arrays in that local frame.
+     *
+     * The same objects are passed to the `tileload` / `tileunload` events.
+     *
+     * @returns {Object[]}
+     *
+     * @example
+     * // A marker on every POI
+     * geoPlay.addEventListener('tileload', ({ tile }) => {
+     *   for (const poi of tile.getFeatures('poi')) {
+     *     const [x, z] = poi.geometry[0];
+     *     const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+     *     marker.position.set(x, 0, z);
+     *     marker.scale.setScalar(3 * tile.unitsPerMeter);   // 3 m
+     *     tile.object3D.add(marker);
+     *   }
+     * });
+     */
+    getTiles() {
+        return this.#tileManager?.tiles ?? [];
     }
 
     /**

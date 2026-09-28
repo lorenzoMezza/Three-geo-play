@@ -13,7 +13,9 @@ ThreeGeoPlay is a JavaScript library that fetches [Vector Tiles (MVT/PBF)](https
 - 🗺️ **Vector tile rendering** — roads, buildings, waterways, land use, and more
 - 🏙️ **3D building extrusion** — true-scale heights from OSM data, solid volumes with baked wall shading and ambient occlusion
 - ☀️ **Shadows** — buildings cast and receive real-time shadows, on the map and on your own objects
-- 🧩 **Plays well with your scene** — map materials are never modified, the ground hides what is below it, buildings are ordinary depth-tested meshes
+- 🧩 **Plays well with your scene** — map materials are never modified, the ground hides what is below it, buildings are ordinary depth-tested meshes; parent, transform or layer the map like any group
+- 🖱️ **Picking & data** — know which building, road or park was clicked, read every feature of a tile (POIs included) and attach your own objects to tiles
+- 🧪 **Data-driven styling** — colour, raise or hide single buildings from their OSM properties
 - 🎨 **Fully styleable** — swap materials, colors, and visibility per layer, live
 - 🔌 **Any vector tile provider** — OpenMapTiles (MapTiler, OpenFreeMap), MapLibre styles, Mapbox, or your own schema
 - 📡 **Auto tile loading** — nearest-first queue with concurrency, abort, timeouts, and retry with backoff
@@ -137,6 +139,56 @@ The map behaves like a solid floor with solid buildings, so objects you add to t
 - **The ground hides what is below it** — an invisible plane writes the ground depth before anything else is drawn (`MapConfig.occludeBelowGround`, default `true`; set it to `false` to see through the ground, e.g. with your own terrain).
 - **Flat layers never cover your objects**, even when their materials are transparent.
 - **Nothing you pass in is modified**, so materials can be shared with your own meshes.
+
+### Integrating with your scene
+
+**The map group is yours.** `geo.getMapGroup()` holds every map mesh. Add it to an object of yours before `start()` (it stays there), move, rotate or scale it; the follow target is tracked through its world position whatever the transform, and the API's "world" coordinates (`latLonToWorld`, `moveMapOriginToPosition`, …) are in the group's space. Set `layers` on it and every map mesh follows (Three.js layers are not inherited, ThreeGeoPlay copies them); `visible` and `renderOrder` work as for any group. Map objects carry `userData.threeGeoPlay = true`.
+
+```js
+const world = new THREE.Group();
+world.scale.setScalar(0.01);                 // your units
+world.add(geo.getMapGroup());
+scene.add(world);
+geo.getMapGroup().layers.set(2);             // e.g. keep the map out of a reflection camera
+geo.start();
+```
+
+**Picking.** `pickFeature(raycaster)` returns what is seen along a ray — the building, road, park… — with its style layer and type, the vector tile properties, the intersection and its outline. Flat layers are stacked by `renderingOrder`, not by height, so use it rather than the nearest intersection (`getFeatureAt(intersection)` works on intersections of your own raycasts).
+
+```js
+raycaster.setFromCamera(pointer, camera);
+const hit = geo.pickFeature(raycaster);
+if (hit?.layer === 'building') console.log(hit.id, hit.properties.render_height, hit.intersection.point);
+if (hit?.layer === 'transportation') console.log(hit.type);          // 'primary', 'minor', …
+```
+
+**Tiles and their data.** `tileload` / `tileunload` events (and `geo.getTiles()`) give each tile on screen as `{ x, y, zoom, object3D, size, unitsPerMeter, getFeatures(sourceLayer?) }`. `getFeatures()` decodes every feature of the tile — also layers the map does not draw, such as POIs or labels — with geometry in the tile's local frame, where `object3D` spans `[0, size]` on X and Z with the ground at Y 0. Objects you add to `object3D` follow the tile when the map moves or is rescaled, and leave the scene with it:
+
+```js
+geo.addEventListener('tileload', ({ tile }) => {
+  for (const poi of tile.getFeatures('poi')) {
+    const [x, z] = poi.geometry[0];
+    const marker = new THREE.Mesh(markerGeometry, markerMaterial);   // a 1 m marker
+    marker.position.set(x, 0, z);
+    marker.scale.setScalar(tile.unitsPerMeter);
+    tile.object3D.add(marker);
+  }
+});
+geo.addEventListener('tileunload', ({ tile }) => tile.object3D.clear());   // dispose your resources here
+```
+
+**Data-driven buildings.** `buildingLayer.featureStyle` is called for every building with `{ id, properties, sourceLayer, type }` and may return `{ color, height, minHeight, visible }` (heights in metres, `color` needs a `vertexColors` material). Assign it again, or call `style.refresh()`, when the answer changes:
+
+```js
+let selected = null;
+style.buildingLayer.featureStyle = ({ id, properties }) =>
+  id === selected ? { color: 0xff8844 } : { color: properties.render_height > 40 ? 0xc8d6ff : 0xffffff };
+// on click:
+selected = geo.pickFeature(raycaster)?.id ?? null;
+style.refresh();
+```
+
+`geo.getTileStats()` tells when everything is on screen: `loading` counts tiles being downloaded or built, `rebuilding` the tiles still waiting for a style change.
 
 ### Shadows
 

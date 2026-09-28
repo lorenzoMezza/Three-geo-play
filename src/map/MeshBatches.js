@@ -47,6 +47,9 @@ export class MeshBatches {
     /** @type {Map<string, Batch>} */
     #batches = new Map();
 
+    /** Batch or per-tile mesh behind each drawn object, for {@link featureAt}. @type {WeakMap<THREE.Object3D, Batch|MeshHandle>} */
+    #owners = new WeakMap();
+
     /**
      * @param {THREE.Object3D} root - Parent of the batched meshes.
      */
@@ -59,12 +62,16 @@ export class MeshBatches {
      * @param {BatchDescriptor} descriptor
      * @param {THREE.BufferGeometry} geometry - Consumed: do not reuse it.
      * @param {THREE.Object3D} tileObject - Parent for the per-tile fallback mesh.
+     * @param {Array} ranges - Flat `[firstVertex, feature, …]` list: which feature each vertex range draws.
+     * @param {Object} tile - The tile the geometry belongs to.
      * @returns {BatchHandle}
      */
-    add(descriptor, geometry, tileObject) {
+    add(descriptor, geometry, tileObject, ranges, tile) {
         const { material } = descriptor;
         if (!BATCHING_SUPPORTED || material.isShaderMaterial) {
-            return new MeshHandle(descriptor, geometry, tileObject);
+            const handle = new MeshHandle(descriptor, geometry, tileObject, { ranges, tile });
+            this.#owners.set(handle.object, handle);
+            return handle;
         }
 
         const key = [
@@ -76,8 +83,19 @@ export class MeshBatches {
         if (!batch) {
             batch = new Batch(descriptor, this.#root, () => this.#batches.delete(key));
             this.#batches.set(key, batch);
+            this.#owners.set(batch.mesh, batch);
         }
-        return batch.add(geometry);
+        return batch.add(geometry, { ranges, tile });
+    }
+
+    /**
+     * The feature drawn at a raycast intersection with one of the map meshes.
+     * @param {THREE.Intersection} intersection
+     * @returns {{ feature: Object, tile: Object } | null} The collected feature and its tile.
+     */
+    featureAt(intersection) {
+        const owner = intersection?.object && this.#owners.get(intersection.object);
+        return owner ? owner.featureAt(intersection) : null;
     }
 
     /** Number of batched meshes (one draw call each). */
@@ -106,10 +124,14 @@ class Batch {
     #count = 0;
     #onEmpty;
 
+    /** Features drawn by each instance. @type {Map<number, { geometryId: number, ranges: Array, tile: Object }>} */
+    #instances = new Map();
+
     constructor(descriptor, root, onEmpty) {
         this.#onEmpty = onEmpty;
         const mesh = new THREE.BatchedMesh(INITIAL_INSTANCES, INITIAL_VERTICES, INITIAL_VERTICES * 2, descriptor.material);
         mesh.name                   = 'ThreeGeoPlayBatch';
+        mesh.layers.mask            = root.layers.mask;
         mesh.matrixAutoUpdate       = false;
         mesh.frustumCulled          = false;  // culled per tile instead
         mesh.perObjectFrustumCulled = true;
@@ -119,7 +141,7 @@ class Batch {
         this.mesh = mesh;
     }
 
-    add(geometry) {
+    add(geometry, { ranges, tile }) {
         const vertices = geometry.getAttribute('position').count;
         this.#reserve(vertices);
         const mesh = this.mesh;
@@ -128,6 +150,7 @@ class Batch {
 
         if (mesh.instanceCount >= mesh.maxInstanceCount) mesh.setInstanceCount(mesh.maxInstanceCount * 2);
         const instanceId = mesh.addInstance(geometryId);
+        this.#instances.set(instanceId, { geometryId, ranges, tile });
         this.#count++;
 
         let removed = false;
@@ -136,9 +159,20 @@ class Batch {
             remove: () => {
                 if (removed) return;
                 removed = true;
+                this.#instances.delete(instanceId);
                 this.#remove(geometryId, vertices);
             },
         };
+    }
+
+    featureAt(intersection) {
+        const entry = this.#instances.get(intersection.batchId);
+        if (!entry || !Number.isInteger(intersection.faceIndex)) return null;
+        // Raycast face indices count from the start of the whole batch buffer.
+        const start = typeof this.mesh.getGeometryRangeAt === 'function'
+            ? this.mesh.getGeometryRangeAt(entry.geometryId).start
+            : this.mesh._geometryInfo[entry.geometryId].start;
+        return featureOfVertex(entry, intersection.faceIndex * 3 - start);
     }
 
     dispose() {
@@ -174,14 +208,25 @@ class Batch {
 class MeshHandle {
 
     #mesh;
+    #entry;
 
-    constructor(descriptor, geometry, tileObject) {
+    constructor(descriptor, geometry, tileObject, entry) {
         geometry.computeBoundingSphere();
         const mesh = new THREE.Mesh(geometry, descriptor.material);
         mesh.matrixAutoUpdate = false;
+        mesh.layers.mask      = tileObject.layers.mask;
         setUpDraw(mesh, descriptor);
         tileObject.add(mesh);
-        this.#mesh = mesh;
+        this.#mesh  = mesh;
+        this.#entry = entry;
+    }
+
+    /** @type {THREE.Mesh|null} */
+    get object() { return this.#mesh; }
+
+    featureAt(intersection) {
+        if (!this.#mesh || !Number.isInteger(intersection.faceIndex)) return null;
+        return featureOfVertex(this.#entry, intersection.faceIndex * 3);
     }
 
     setMatrix() {
@@ -205,7 +250,8 @@ class MeshHandle {
  * @param {BatchDescriptor} descriptor
  */
 function setUpDraw(mesh, { kind, renderOrder, castShadow, receiveShadow, depthPrepass }) {
-    mesh.userData.kind = kind;
+    mesh.userData.kind         = kind;
+    mesh.userData.threeGeoPlay = true;
     mesh.castShadow    = !!castShadow;
     mesh.receiveShadow = !!receiveShadow;
     if (kind === 'building') {
@@ -215,4 +261,26 @@ function setUpDraw(mesh, { kind, renderOrder, castShadow, receiveShadow, depthPr
     // Flat map layers are stacked by render order instead of depth.
     mesh.renderOrder = renderOrder;
     drawWithoutDepthWrite(mesh);
+}
+
+/**
+ * The feature whose vertex range contains `vertex`: the last range starting at
+ * or before it (ranges of features that drew nothing are empty and skipped).
+ * @param {{ ranges: Array, tile: Object }} entry
+ * @param {number} vertex - Vertex index in the tile geometry.
+ */
+function featureOfVertex({ ranges, tile }, vertex) {
+    let lo = 0;
+    let hi = ranges.length / 2 - 1;
+    let found = -1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (ranges[mid * 2] <= vertex) {
+            found = mid;
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return found < 0 ? null : { feature: ranges[found * 2 + 1], tile };
 }
