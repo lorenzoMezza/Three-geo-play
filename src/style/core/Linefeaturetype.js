@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { BaseFeatureType } from './Basefeaturetype';
+import { BaseFeatureType } from './Basefeaturetype.js';
 
 /**
  * Extends {@link BaseFeatureType} with line-specific properties:
- * `outlineMaterial`, `lineWidth`, `outlineWidth`.
+ * `outlineMaterial`, `lineWidth`, `outlineWidth`, `jointSegments`.
  *
  * Used by `WaterwayType` (via `WaterwayLayer`) and `RoadType`
  * (via `TransportationLayer`).
@@ -13,35 +13,36 @@ import { BaseFeatureType } from './Basefeaturetype';
  */
 export class LineFeatureType extends BaseFeatureType {
 
-
-    #isVisible = true
     /** @type {THREE.Material|null} */
     #outlineMaterial = null;
 
     /** @type {number} */
     #lineWidth = 0;
 
-    /**
-     * `null` means "fall back to the layer-level default" (e.g.
-     * {@link GeneralConfig#outlineWidth} in `TransportationLayer`).
-     * @type {number|null}
-     */
-    #outlineWidth = 0.03;
+    /** @type {number} */
+    #outlineWidth = 0;
 
+    /** @type {number} Value restored by {@link resetOutlineWidth}. */
+    #defaultOutlineWidth = 0;
+
+    /** @type {number} */
     #jointSegments = 8;
+
     /**
      * @param {THREE.Material}      material
      * @param {THREE.Material}      outlineMaterial
      * @param {number}              Y
      * @param {number}              [lineWidth=0]
-     * @param {number}              [defaultRenderingOrder=-1]
+     * @param {number}              [outlineWidth=0]
+     * @param {boolean}             [isVisible=true]
+     * @param {number}              [renderingOrder=-1]
      */
-    constructor(material, outlineMaterial, Y, lineWidth = 0,outlineWidth,isVisible = true,renderingOrder = -1) {
-        super(material, Y, renderingOrder);
-        this.#outlineMaterial = outlineMaterial;
-        this.#lineWidth       = lineWidth;
-        this.#outlineWidth = outlineWidth;
-        this.#isVisible = isVisible;
+    constructor(material, outlineMaterial, Y, lineWidth = 0, outlineWidth = 0, isVisible = true, renderingOrder = -1) {
+        super(material, Y, renderingOrder, isVisible);
+        this.#outlineMaterial     = outlineMaterial;
+        this.#lineWidth           = lineWidth;
+        this.#outlineWidth        = outlineWidth;
+        this.#defaultOutlineWidth = outlineWidth;
     }
 
     // ── outlineMaterial ──────────────────────────────────────────────────────
@@ -58,24 +59,14 @@ export class LineFeatureType extends BaseFeatureType {
             return;
         }
         this.#outlineMaterial = m;
+        this._touch();
     }
-    /**
-     * Sets master layer visibility and propagates to all road types.
-     * @param {boolean} isVisible
-     */
-   set isVisible(isVisible)
-   {
-    this.#isVisible = isVisible
-   }
 
-
-    get isVisible() {
-        return this.#isVisible;          // setter in BaseLayer propagates automatically
-    }
     // ── lineWidth ────────────────────────────────────────────────────────────
 
     /**
-     * Half-width of the rendered line geometry in world units. Must be ≥ 0.
+     * Full width of the rendered line, relative to one tile at zoom 18
+     * (so roads keep the same real-world width at every zoom level). Must be ≥ 0.
      * @type {number}
      */
     get lineWidth() { return this.#lineWidth; }
@@ -85,7 +76,15 @@ export class LineFeatureType extends BaseFeatureType {
             return;
         }
         this.#lineWidth = v;
+        this._touch();
     }
+
+    // ── jointSegments ────────────────────────────────────────────────────────
+
+    /**
+     * Number of points used to round line caps and joints. Minimum 6.
+     * @type {number}
+     */
     get jointSegments() { return this.#jointSegments; }
     set jointSegments(num) {
         if (typeof num !== 'number' || isNaN(num)) {
@@ -94,35 +93,43 @@ export class LineFeatureType extends BaseFeatureType {
         }
         if (num < 6) {
             console.warn(`ThreeGeoPlay: jointSegments cannot be less than 6 (received: ${num}), defaulting to 6`);
-            this.#jointSegments = 6;
-            return;
+            num = 6;
         }
-        this.#jointSegments = num;
+        this.#jointSegments = Math.round(num);
+        this._touch();
     }
 
     // ── outlineWidth ─────────────────────────────────────────────────────────
 
     /**
-     * Per-type outline width override in world units.
-     * Set to `null` to fall back to the layer-level default.
-     * @type {number|null}
+     * Extra width added around the line and drawn with `outlineMaterial`
+     * (same units as {@link lineWidth}). `0` disables the outline.
+     * Assigning `null` restores the default value.
+     * @type {number}
      */
     get outlineWidth() { return this.#outlineWidth; }
     set outlineWidth(num) {
-        if (num !== null && (typeof num !== 'number' || isNaN(num))) {
+        if (num === null) {
+            this.resetOutlineWidth();
+            return;
+        }
+        if (typeof num !== 'number' || isNaN(num)) {
             console.warn(`ThreeGeoPlay: outlineWidth must be a number or null (received: ${num})`);
             return;
         }
-        if (num !== null && num < 0) {
-            console.warn(`ThreeGeoPlay: outlineWidth cannot be negative, defaulting to 0`);
-            this.#outlineWidth = 0;
-            return;
+        if (num < 0) {
+            console.warn('ThreeGeoPlay: outlineWidth cannot be negative, defaulting to 0');
+            num = 0;
         }
         this.#outlineWidth = num;
+        this._touch();
     }
 
     /**
-     * Clears the per-type outline width override, falling back to the layer default.
+     * Restores the outline width this type was created with.
      */
-    resetOutlineWidth() { this.#outlineWidth = null; }
+    resetOutlineWidth() {
+        this.#outlineWidth = this.#defaultOutlineWidth;
+        this._touch();
+    }
 }

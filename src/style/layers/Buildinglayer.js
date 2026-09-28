@@ -1,22 +1,25 @@
 import * as THREE from 'three';
-import { BaseFeatureType } from '../core/Basefeaturetype';
+import { BaseFeatureType } from '../core/Basefeaturetype.js';
 
 /**
  * Controls the rendering of 3D building extrusions on the map.
- * Buildings are extruded polygons whose height can be driven by OSM data or
- * fixed manually via {@link BuildingLayer#height}.
+ * Buildings are extruded from their real OSM height (`render_height` /
+ * `render_min_height`, or `height` / `min_height`), converted to world units
+ * using the map's zoom level and tile size, and multiplied by
+ * {@link BuildingLayer#height}.
  *
  * `BuildingLayer` is a single-type layer — it acts as both the layer and its
  * own feature type, so `getTypeByName` returns `this`.
  *
  * Inherits `material`, `Y`, `renderingOrder`, and `isVisible` from
- * {@link BaseFeatureType}.
+ * {@link BaseFeatureType}. `renderingOrder` is not applied to buildings:
+ * they are real 3D geometry and use the depth buffer.
  *
  * @example
- * const style = geoPlay.getMapConfig().mapStyle;
+ * const style = geoPlay.getMapStyle();
  * style.buildingLayer.isVisible = true;
- * style.buildingLayer.height    = 0.002;
- * style.buildingLayer.material  = new THREE.MeshBasicMaterial({ color: 0xeeeecc });
+ * style.buildingLayer.height    = 1.5; // 50 % taller than reality
+ * style.buildingLayer.material  = new THREE.MeshStandardMaterial({ color: 0xeeeecc });
  *
  * @class
  * @extends BaseFeatureType
@@ -24,7 +27,7 @@ import { BaseFeatureType } from '../core/Basefeaturetype';
 export class BuildingLayer extends BaseFeatureType {
 
     /** @type {number} */
-    #height = 0.0015;
+    #height = 1;
 
     /** @type {boolean} */
     #allowDetails = false;
@@ -32,7 +35,7 @@ export class BuildingLayer extends BaseFeatureType {
     /**
      * @param {THREE.Material} [material] - Fill material. Defaults to a
      *   semi-transparent yellow-green.
-     * @param {number}         [Y=0.03]
+     * @param {number}         [Y=0]
      */
     constructor(
         material = new THREE.MeshBasicMaterial({
@@ -43,42 +46,54 @@ export class BuildingLayer extends BaseFeatureType {
         }),
         Y = 0.0,
     ) {
-        // Buildings render on top of everything else → no negative renderingOrder
-        // (renderingOrder is intentionally left as the base default -1 and is
-        // overridden per-mesh in Tile.js for extruded geometry).
         super(null, Y, -1);
-        this.material = this.#validateAndWrapMaterial(material);
+        this.material = material;
     }
 
     // ── material override ────────────────────────────────────────────────────
 
     /**
      * The Three.js material applied to building geometry.
-     * Assigning an invalid value logs a warning and is silently ignored.
+     * Materials with `opacity < 1` are made transparent with `depthWrite`
+     * disabled. Assigning an invalid value logs a warning and is ignored.
      * @type {THREE.Material|null}
      */
     get material() { return super.material; }
     set material(value) {
-        super.material = this.#validateAndWrapMaterial(value);
+        if (value !== null && value !== undefined && !(value instanceof THREE.Material)) {
+            console.warn('ThreeGeoPlay: Invalid building material — must be a valid THREE.Material');
+            return;
+        }
+        super.material = this.#prepareMaterial(value ?? null);
     }
 
     // ── building-specific properties ─────────────────────────────────────────
 
     /**
-     * Base extrusion height multiplier applied to buildings that have no
-     * `render_height` property in the tile data.
+     * Vertical exaggeration applied to the real building heights.
+     * `1` (default) renders buildings at true scale relative to the map,
+     * `2` twice as tall, `0` flat footprints. Must be ≥ 0.
      * @type {number}
      */
     get height()       { return this.#height; }
-    set height(value)  { this.#height = value; }
+    set height(value)  {
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+            console.warn(`ThreeGeoPlay: building height must be a non-negative number (received: ${value})`);
+            return;
+        }
+        this.#height = value;
+        this._touch();
+    }
 
     /**
-     * If `true`, finer building detail (e.g. roof shapes) will be rendered
-     * when available in the tile data.
+     * Reserved for finer building detail (e.g. roof shapes). Currently has no effect.
      * @type {boolean}
      */
     get allowDetails()      { return this.#allowDetails; }
-    set allowDetails(value) { this.#allowDetails = !!value; }
+    set allowDetails(value) {
+        this.#allowDetails = !!value;
+        this._touch();
+    }
 
     // ── single-type layer contract ────────────────────────────────────────────
 
@@ -100,14 +115,14 @@ export class BuildingLayer extends BaseFeatureType {
     setMaterial(material)     { this.material     = material; return this; }
 
     /**
-     * Sets the Y render order and returns this instance for chaining.
+     * Sets the base height (Y) and returns this instance for chaining.
      * @param {number} y
      * @returns {BuildingLayer}
      */
-    setY(y)              { this.Y       = y;        return this; }
+    setY(y)                   { this.Y            = y;        return this; }
 
     /**
-     * Sets the base extrusion height multiplier and returns this instance for chaining.
+     * Sets the height exaggeration factor and returns this instance for chaining.
      * @param {number} h
      * @returns {BuildingLayer}
      */
@@ -123,20 +138,14 @@ export class BuildingLayer extends BaseFeatureType {
     // ── private ───────────────────────────────────────────────────────────────
 
     /**
-     * Validates a material and ensures transparent materials have `depthWrite`
-     * disabled (required for correct alpha blending with the map geometry).
+     * Ensures semi-transparent materials have `depthWrite` disabled
+     * (required for correct alpha blending with the map geometry).
      * @param {THREE.Material|null} material
      * @returns {THREE.Material|null}
      * @private
      */
-    #validateAndWrapMaterial(material) {
-        if (!material || !(material instanceof THREE.Material)) {
-            if (material !== null && material !== undefined) {
-                console.warn('ThreeGeoPlay: Invalid building material — must be a valid THREE.Material');
-            }
-            return null;
-        }
-        if (material.opacity < 1) {
+    #prepareMaterial(material) {
+        if (material && material.opacity < 1) {
             material.transparent = true;
             material.depthWrite  = false;
         }

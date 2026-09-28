@@ -1,4 +1,4 @@
-import { MapStyle } from "../MapStyle";
+import { MapStyle } from "../MapStyle.js";
 
 const darkStyle = new MapStyle()
 
