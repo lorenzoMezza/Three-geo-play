@@ -80,11 +80,10 @@ class Trail {
 
 /**
  * Fly mode: a propeller plane over Rome, a grand tour through rings above the
- * landmarks (placed with `latLonToWorld()`), crashes on the roofs (collisions
- * from the tile data), the plane's shadow sweeping over the city.
+ * landmarks (placed with `latLonToWorld()`), crashes on the roofs (`getHeightAt()`), the plane's shadow sweeping over the city.
  */
 export function createFlyMode(app) {
-    const { geo, camera, keys, hud, collider, lighting, scene } = app
+    const { geo, camera, keys, hud, lighting, scene } = app
     const plane  = createPlane()
     const state  = { yaw: 0, pitch: 0, roll: 0, speed: CRUISE }
     const pos    = plane.object.position
@@ -187,7 +186,7 @@ export function createFlyMode(app) {
             plane.propeller.rotation.z += dt * (30 + state.speed * 0.4)
 
             // ── crash into the roofs or the ground ────────────────────────────
-            if (pos.y < collider.heightAt(pos.x, pos.z) + 2.5) {
+            if (pos.y < geo.getHeightAt(pos.x, pos.z) + 2.5) {
                 hud.flash('Crash! Back to the last ring', 1.5)
                 respawn(checkpoint)
             }

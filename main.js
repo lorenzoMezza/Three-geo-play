@@ -10,7 +10,6 @@ import { installInspector } from './src/inspector.js'
 import { buildPanel } from './src/panel.js'
 import { Keys } from './src/game/input.js'
 import { Hud } from './src/game/hud.js'
-import { CityCollider } from './src/game/collider.js'
 import { createWalkMode } from './src/game/walk.js'
 import { createFlyMode } from './src/game/fly.js'
 import './style.css'
@@ -206,34 +205,28 @@ function updateAttribution() {
 
 // ─── Scenes: explore, walk, fly ─────────────────────────────────────────────
 // The games use the same map and scene. They set the map so that one world
-// unit is one metre, around their own follow target; `controls.target` stays
-// the point of interest (lighting, fog and read-out follow it).
-const keys     = new Keys()
-const hud      = new Hud()
-const collider = new CityCollider(geo)
-const tileMetres = lat => 40075016.686 * Math.cos(lat * Math.PI / 180) / 2 ** SOURCES.local.zoomLevel
+// unit is one metre (`unitsPerMeter`), around their own follow target, and
+// stand on the roofs with `geo.getHeightAt()`; `controls.target` stays the
+// point of interest (lighting, fog and read-out follow it).
+const keys = new Keys()
+const hud  = new Hud()
 
 const game = {
-    geo, scene, camera, renderer, lighting, keys, hud, collider,
+    geo, scene, camera, renderer, lighting, keys, hud,
     focus: controls.target,
 
     /** Sets the map up for a game: metres, tiles around `follow`, a low sun. */
     startGame({ spawn, renderDistance, follow, sun }) {
         if (source.name !== 'local') source.set('local')
-        config.set({
-            originLatLon: spawn, worldOriginOffset: { x: 0, z: 0 },
-            tileWorldSize: tileMetres(spawn.lat), renderDistance,
-        })
+        config.set({ originLatLon: spawn, worldOriginOffset: { x: 0, z: 0 }, unitsPerMeter: 1, renderDistance })
         loading.follow(follow)
         geo.onFrameUpdate()   // apply the new scale now, so the tiles are placed before the game reads them
         Object.assign(lighting, sun)
-        collider.start()
         keys.clear()
         keys.enabled = true
     },
 
     endGame() {
-        collider.stop()
         keys.enabled = false
         lighting.shadowArea = null
     },
@@ -295,7 +288,7 @@ for (const button of modeButtons) button.addEventListener('click', () => { setMo
 
 // Debug handle for the browser console during development (`demo.geo`, `demo.camera`, …).
 if (import.meta.env.DEV) {
-    window.demo = { THREE, geo, camera, controls, scene, renderer, focus, atmosphere, lighting, loading, source, setMode, collider, keys }
+    window.demo = { THREE, geo, camera, controls, scene, renderer, focus, atmosphere, lighting, loading, source, setMode, keys }
     /** Runs one frame by hand (the loop stops while the tab is hidden). */
     window.demo.step = (dt = 1 / 60) => { mode.update(dt); geo.onFrameUpdate(); atmosphere.update(dt); lighting.update(); renderer.render(scene, camera) }
 }

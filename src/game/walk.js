@@ -36,7 +36,7 @@ const LEFT = ['KeyA', 'ArrowLeft'], RIGHT = ['KeyD', 'ArrowRight']
  * shadows cast by and on your own objects.
  */
 export function createWalkMode(app) {
-    const { geo, camera, renderer, keys, hud, collider, lighting } = app
+    const { geo, camera, renderer, keys, hud, lighting } = app
     const runner    = createRunner()
     const player    = runner.object
     const coins     = new CoinField(geo)
@@ -84,7 +84,7 @@ export function createWalkMode(app) {
         enter() {
             app.startGame({ spawn: SPAWN, renderDistance: 3, follow: player, sun: { azimuth: 250, elevation: 24 } })
             lighting.shadowArea = 70
-            player.position.set(0, collider.heightAt(0, 0), 0)
+            player.position.set(0, geo.getHeightAt(0, 0), 0)
             player.rotation.y = Math.PI / 2   // facing the basilica (west)
             grounded = true
             charge   = 0
@@ -143,8 +143,8 @@ export function createWalkMode(app) {
             // Walls stop the runner; low steps are climbed. Slide along walls.
             const free = (x, z) => {
                 const hs = Math.hypot(velocity.x, velocity.z) || 1
-                return collider.heightAt(x, z) <= pos.y + STEP &&
-                       collider.heightAt(x + velocity.x / hs * RADIUS, z + velocity.z / hs * RADIUS) <= pos.y + STEP
+                return geo.getHeightAt(x, z) <= pos.y + STEP &&
+                       geo.getHeightAt(x + velocity.x / hs * RADIUS, z + velocity.z / hs * RADIUS) <= pos.y + STEP
             }
             const nx = pos.x + velocity.x * dt
             const nz = pos.z + velocity.z * dt
@@ -164,7 +164,7 @@ export function createWalkMode(app) {
             }
 
             // ── gravity and landing on the ground or on a roof ────────────────
-            const ground = collider.heightAt(pos.x, pos.z)
+            const ground = geo.getHeightAt(pos.x, pos.z)
             if (grounded && ground < pos.y - 0.05) grounded = false   // walked off a roof
             if (!grounded) {
                 velocity.y -= GRAVITY * dt
@@ -200,7 +200,7 @@ export function createWalkMode(app) {
                 target.y + Math.sin(view.pitch) * view.distance,
                 target.z + Math.cos(view.yaw) * cp * view.distance,
             )
-            desired.y = Math.max(desired.y, collider.heightAt(desired.x, desired.z) + 0.6)
+            desired.y = Math.max(desired.y, geo.getHeightAt(desired.x, desired.z) + 0.6)
             camera.position.lerp(desired, 1 - Math.exp(-dt * 10))
             camera.lookAt(target)
             app.focus.copy(pos)

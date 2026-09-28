@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { MapStyle, TileLayout } from 'lm-three-geo-play'
 
 import { PLACES, SOURCES, TILESET, isInsideTileset } from './tileset.js'
-import { applyDayTheme, applyNightTheme } from './themes.js'
+import { applyDayTheme } from './themes.js'
 import {
     section, subheading, hint, slider, toggle, select, segmented, color, button, chips, coordinates,
     inputWithButton, legendHeader, legendRow, refreshAll,
@@ -183,9 +183,9 @@ export function buildPanel(root, app) {
         options: [['default', 'Day'], ['night', 'Night']],
         get: () => theme,
         set: name => {
-            const next = new MapStyle()
-            if (name === 'night') applyNightTheme(next)
-            else applyDayTheme(next)
+            // The night theme is the library's ready-made MapStyle.dark().
+            const next = name === 'night' ? MapStyle.dark() : new MapStyle()
+            if (name !== 'night') applyDayTheme(next)
             geo.setMapStyle(next)
             theme = name
             app.atmosphere.resample()

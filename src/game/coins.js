@@ -1,7 +1,6 @@
 import * as THREE from 'three'
 
 import { createCoinAssets } from './models.js'
-import { insidePolygon } from './collider.js'
 
 const ROOF_COINS   = 5
 const STREET_COINS = 7
@@ -14,6 +13,18 @@ const _pos    = new THREE.Vector3()
 const _scale  = new THREE.Vector3()
 const _world  = new THREE.Vector3()
 const Y_AXIS  = new THREE.Vector3(0, 1, 0)
+
+/** Even-odd point-in-polygon test over all the rings of a polygon (holes are outside). */
+function insidePolygon(rings, x, z) {
+    let inside = false
+    for (const ring of rings) {
+        for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
+            const xi = ring[i], zi = ring[i + 1], xj = ring[j], zj = ring[j + 1]
+            if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) inside = !inside
+        }
+    }
+    return inside
+}
 
 /** Small deterministic random generator, so a tile always gets the same coins. */
 function random(seed) {
