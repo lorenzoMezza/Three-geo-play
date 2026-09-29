@@ -28,6 +28,8 @@ export function installRadialFog() {
     for (const shader of Object.values(THREE.ShaderLib)) {
         if (shader.uniforms?.fogColor) shader.uniforms.fogCenter = { value: fogCenter }
     }
+    // Custom ShaderMaterials with `fog: true` merge UniformsLib.fog: give them the centre too.
+    THREE.UniformsLib.fog.fogCenter = { value: fogCenter }
 
     THREE.ShaderChunk.fog_pars_vertex = /* glsl */ `
 #ifdef USE_FOG

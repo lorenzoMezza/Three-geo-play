@@ -3,6 +3,7 @@ import { MapStyle, TileLayout } from 'lm-three-geo-play'
 
 import { PLACES, SOURCES, TILESET, isInsideTileset } from './tileset.js'
 import { applyDayTheme } from './themes.js'
+import { createNeonStyle } from './neon.js'
 import {
     section, subheading, hint, slider, toggle, select, segmented, color, button, chips, coordinates,
     inputWithButton, legendHeader, legendRow, refreshAll,
@@ -29,6 +30,7 @@ const compass = degrees => `${COMPASS[Math.round(degrees / 45) % 8]} · ${Math.r
  * sun, receives shadows) or `MeshBasicMaterial` (unlit, shading baked by the library).
  */
 function withLighting(material, lit) {
+    if (material.isNeonBuilding) return material.withLighting(lit)   // keeps its custom shader
     const Type = lit ? THREE.MeshLambertMaterial : THREE.MeshBasicMaterial
     return new Type({
         color:        material.color,
@@ -180,18 +182,20 @@ export function buildPanel(root, app) {
     let theme = 'default'
     segmented(styleSec, {
         label: 'Theme',
-        options: [['default', 'Day'], ['night', 'Night']],
+        options: [['default', 'Day'], ['night', 'Night'], ['neon', 'Neon']],
         get: () => theme,
         set: name => {
-            // The night theme is the library's ready-made MapStyle.dark().
-            const next = name === 'night' ? MapStyle.dark() : new MapStyle()
-            if (name !== 'night') applyDayTheme(next)
+            // Night is the library's ready-made MapStyle.dark(); Neon is made of custom shaders (src/neon.js).
+            const next = name === 'night' ? MapStyle.dark()
+                       : name === 'neon'  ? createNeonStyle({ geo, focus: controls.target })
+                       : applyDayTheme(new MapStyle())
             geo.setMapStyle(next)
             theme = name
             app.atmosphere.resample()
             refreshAll()
         },
     })
+    hint(styleSec, 'Neon is drawn with custom shaders: built-in materials extended with onBeforeCompile (still one draw call per material) and a ShaderMaterial for the water.')
 
     // ── Sun & shadows ────────────────────────────────────────────────────────
     const sunSec = section(root, { title: 'Sun & shadows', open: true })
@@ -221,7 +225,7 @@ export function buildPanel(root, app) {
     segmented(bld, {
         label: 'Shading',
         options: [['lit', 'Sun'], ['baked', 'Baked']],
-        get: () => (buildings().material.isMeshBasicMaterial ? 'baked' : 'lit'),
+        get: () => (buildings().material.isMeshBasicMaterial || buildings().material.unlit ? 'baked' : 'lit'),
         set: v => { buildings().material = withLighting(buildings().material, v === 'lit'); refreshAll() },
     })
     color(bld, { label: 'Walls', get: () => buildings().material.color, set: v => buildings().material.color.set(v) })

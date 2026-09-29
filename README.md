@@ -33,7 +33,10 @@ game would (`src/game/`):
 - Transparent buildings drawn as a single layer of "glass" — no inner walls
 - Click on the map to see what is there (building height, road type, land use…): `pickFeature()` of the library, with a pin that casts its shadow like any object of your scene
 - Live restyling of every layer: colours, visibility, outlines, building height, opacity, roof tint, sun or baked shading
-- Themes applied to the tiles already on screen: the day style and the library's `MapStyle.dark()`
+- Themes applied to the tiles already on screen: the day style, the library's `MapStyle.dark()` and **Neon**, drawn with custom shaders
+  ([`src/neon.js`](src/neon.js)): built-in materials extended with `onBeforeCompile` — windows on every floor, circuit roofs,
+  a hexagon grid on parks, glowing roads and a light pulse, all in metres — still batched (one draw call per material),
+  lit, shadowed and fogged; a generated canvas texture; and a `ShaderMaterial` written from scratch for the animated water
 - Jumping to real places, geographic coordinates of the view
 - Switching tile provider live: the local tile set, OpenFreeMap through its MapLibre style URL, or Mapbox Streets with your access token
 

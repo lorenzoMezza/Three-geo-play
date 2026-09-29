@@ -11,4 +11,5 @@ export function applyDayTheme(style) {
     buildings.material  = new THREE.MeshLambertMaterial({ color: 0xf1ebe0, vertexColors: true })
     buildings.roofColor = 0xf6ebe2
     style.shadowLayer.material.opacity = 0.32
+    return style
 }
