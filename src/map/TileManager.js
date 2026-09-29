@@ -68,8 +68,6 @@ const State = Object.freeze({
  * Changes are requested through {@link setCenterPosition}, {@link configChanged}
  * and {@link restyle}, and applied together by {@link update} (called once per
  * frame by {@link ThreeGeoPlay#onFrameUpdate}).
- *
- * @private
  */
 export class TileManager {
 
@@ -299,6 +297,7 @@ export class TileManager {
             style:       item.style,
             sourceLayer: item.sourceLayer,
             id:          item.feature.id,
+            key:         tile.featureKey(item.sourceLayer, item.index),
             properties:  item.feature.properties,
             tile:        tile.info,
             getGeometry: () => tile.featureGeometry(item.feature, item.extent),
@@ -617,7 +616,7 @@ export class TileManager {
 
             if (result.status === 'ok') {
                 this.#tilesFound++;
-                record.tile  = new Tile(result.payload);
+                record.tile  = new Tile(result.payload, `${this.#zoom}/${record.tx}/${record.ty}`);
                 record.tile.object3D.layers.mask = this.#root.layers.mask;
                 record.state = State.LOADED;
                 this.#enqueueBuild(record);

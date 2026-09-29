@@ -2,14 +2,8 @@ import * as THREE from 'three';
 import { BaseFeatureType } from './BaseFeatureType.js';
 
 /**
- * Extends {@link BaseFeatureType} with line-specific properties:
- * `outlineMaterial`, `lineWidth`, `outlineWidth`, `jointSegments`.
- *
- * Used by `WaterwayType` (via `WaterwayLayer`) and `RoadType`
- * (via `TransportationLayer`).
- *
- * @class
- * @extends BaseFeatureType
+ * A line type (road, waterway): adds the outline material, the widths (in
+ * metres or relative to a zoom-18 tile) and the round cap resolution.
  */
 export class LineFeatureType extends BaseFeatureType {
 

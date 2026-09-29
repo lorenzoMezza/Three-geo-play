@@ -6,7 +6,6 @@ const basic = color => new THREE.MeshBasicMaterial({ color });
  * Night look: dark ground, glowing arterial roads, deep water and unlit
  * buildings shaded by the library. Built only with the public style API.
  * @param {import('./MapStyle.js').MapStyle} style
- * @private
  */
 export function applyDarkPreset(style) {
     style.backgroundLayer.material = basic(0x10131a);

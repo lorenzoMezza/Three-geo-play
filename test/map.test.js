@@ -97,6 +97,94 @@ test('featureStyle can raise and hide buildings, and is applied to the tiles on 
     geo.destroy();
 });
 
+/** What is seen straight down from every point of a 10 m grid around the origin. */
+function lookDown(geo) {
+    const raycaster = new THREE.Raycaster();
+    const hits = [];
+    for (let x = -200; x < 200; x += 10) {
+        for (let z = -200; z < 200; z += 10) {
+            raycaster.set(new THREE.Vector3(x, 1000, z), new THREE.Vector3(0, -1, 0));
+            const feature = geo.pickFeature(raycaster);
+            if (feature) hits.push({ x, z, feature });
+        }
+    }
+    return hits;
+}
+
+/** Vertex colour of the face hit by a pick. */
+function colorAt({ intersection }) {
+    const color = intersection.object.geometry.getAttribute('color');
+    const i = intersection.face.a;
+    return { r: color.getX(i), g: color.getY(i), b: color.getZ(i) };
+}
+
+test('featureStyle changes only the features it styles, although they share batched meshes', async () => {
+    const { geo } = await loadMap(server.url);
+    const style = geo.getMapStyle();
+    const before = lookDown(geo);
+    const buildings = before.filter(hit => hit.feature.layer === 'building');
+    const roads = before.filter(hit => hit.feature.layer === 'transportation');
+    // OpenMapTiles leaves most ids at 0: only keys tell these features apart.
+    assert.ok(buildings.filter(hit => hit.feature.id === 0).length > 1, 'buildings sharing id 0');
+    const building = buildings.find(hit => hit.feature.id === 0).feature.key;
+    const road = roads[0].feature.key;
+    const heightBefore = new Map(buildings.map(({ x, z }) => [`${x},${z}`, geo.getHeightAt(x, z)]));
+
+    const red = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    style.buildingLayer.featureStyle = ({ key }) => (key === building ? { color: 0xff0000, height: 150 } : null);
+    style.forEachType(type => {
+        if (type.outlineMaterial !== undefined) type.featureStyle = ({ key }) => (key === road ? { material: red } : null);
+    });
+    await settle(geo);
+
+    let styled = 0;
+    for (const hit of lookDown(geo)) {
+        const { layer, key } = hit.feature;
+        if (layer === 'building' && key === building) {
+            styled++;
+            const { g, b } = colorAt(hit.feature);
+            assert.ok(g < 0.01 && b < 0.01, 'the styled building is red');
+            assert.ok(Math.abs(geo.getHeightAt(hit.x, hit.z) - 150) < 0.01, 'the styled building is 150 m tall');
+        } else if (layer === 'building') {
+            const { g, b } = colorAt(hit.feature);
+            assert.ok(g > 0.1 && b > 0.1, `building ${key} keeps its colour`);
+            const height = heightBefore.get(`${hit.x},${hit.z}`);
+            if (height !== undefined && hit.feature.intersection.point.y < 149) {
+                assert.ok(Math.abs(geo.getHeightAt(hit.x, hit.z) - height) < 0.01, `building ${key} keeps its height`);
+            }
+        } else if (layer === 'transportation') {
+            assert.equal(hit.feature.intersection.object.material === red, key === road, `road ${key}`);
+        }
+    }
+    assert.ok(styled > 0, 'the styled building is in view');
+
+    const glass = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.5 });
+    style.buildingLayer.featureStyle = ({ key }) => (key === building ? { material: glass } : null);
+    await settle(geo);
+    for (const hit of lookDown(geo)) {
+        if (hit.feature.layer !== 'building') continue;
+        const material = hit.feature.intersection.object.material;
+        assert.equal(material === glass, hit.feature.key === building, `material of building ${hit.feature.key}`);
+    }
+    geo.destroy();
+});
+
+test('feature keys are unique and the same in picking, featureStyle and getFeatures()', async () => {
+    const { geo } = await loadMap(server.url);
+    const styled = new Set();
+    geo.getMapStyle().buildingLayer.featureStyle = ({ key }) => { styled.add(key); return null; };
+    await settle(geo);
+
+    const tile = geo.getTiles()[0];
+    const keys = tile.getFeatures().map(feature => feature.key);
+    assert.equal(new Set(keys).size, keys.length, 'no two features share a key');
+    assert.match(keys[0], new RegExp(`^${tile.zoom}/${tile.x}/${tile.y}/`));
+
+    const picked = lookDown(geo).filter(hit => hit.feature.layer === 'building');
+    assert.ok(picked.length > 0 && picked.every(hit => styled.has(hit.feature.key)), 'picked keys are the styled ones');
+    geo.destroy();
+});
+
 test('unitsPerMeter gives a metric scale', async () => {
     const { geo } = await loadMap(server.url, { unitsPerMeter: 1 });
     // 0.001° of latitude is about 111 m.

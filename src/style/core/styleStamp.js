@@ -9,7 +9,6 @@ let lastStamp = 0;
  * inside it changed — even when whole layers are swapped.
  *
  * @returns {number}
- * @private
  */
 export function nextStyleStamp() {
     return ++lastStamp;

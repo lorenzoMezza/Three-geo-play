@@ -462,11 +462,11 @@ The function runs again when a tile is rebuilt. When its answer changes because 
 
 ```js
 let selected = null;
-style.buildingLayer.featureStyle = ({ id, properties }) =>
-  id === selected ? { color: 0xff8844 } : { height: Number(properties.render_height ?? 10) * 1.2 };
+style.buildingLayer.featureStyle = ({ key, properties }) =>
+  key === selected ? { color: 0xff8844 } : { height: Number(properties.render_height ?? 10) * 1.2 };
 
 renderer.domElement.addEventListener('click', () => {
-  selected = geo.pickFeature(raycaster)?.id ?? null;
+  selected = geo.pickFeature(raycaster)?.key ?? null;   // key, not id: ids are often 0
   style.refresh();
 });
 
@@ -511,7 +511,8 @@ Tiles of big cities hold a lot of data: a zoom-14 OpenMapTiles tile of central R
 | Member | Description |
 |---|---|
 | `sourceLayer` | Layer of the vector tile (`'building'`, `'poi'`, …). |
-| `id` | Feature id from the tile. |
+| `id` | Feature id from the tile data. OpenMapTiles leaves it at 0 for most features (roads, land use, many buildings), so several features can share it. |
+| `key` | Unique name of the feature on the map (`zoom/x/y/sourceLayer/index`): compare keys to tell features apart, e.g. the one the user clicked. A building crossing a tile edge is one feature per tile. |
 | `type` | `'point'`, `'line'` or `'polygon'`. |
 | `properties` | Vector tile attributes. |
 | `geometry` | Parts as flat `[x0, z0, x1, z1, …]` arrays in the tile's local frame: points, lines, or polygon rings (exterior then holes). |
@@ -525,7 +526,7 @@ Returned by `getFeatureAt()`.
 | `layer` | Style layer name (`'building'`, `'transportation'`, …). |
 | `type` | Style type name (`'primary'`, `'residential'`, `'building'`, …). |
 | `style` | The feature type object (e.g. `style.transportationLayer.primary`). |
-| `sourceLayer`, `id`, `properties` | As in `TileFeature`. |
+| `sourceLayer`, `id`, `key`, `properties` | As in `TileFeature`. |
 | `tile` | The [`MapTile`](#maptile) it was hit in. |
 | `getGeometry()` | Outline in the tile's local frame, as in `TileFeature.geometry`. |
 
@@ -535,7 +536,7 @@ Returned by `getFeatureAt()`.
 
 ### StyledFeature
 
-Passed to `featureStyle`: `{ id, properties, sourceLayer, type }` (`type` is the style type name the feature was matched to).
+Passed to `featureStyle`: `{ id, key, properties, sourceLayer, type }` (`key` as in `TileFeature`; `type` is the style type name the feature was matched to).
 
 ### FeatureStyleOverrides / BuildingFeatureStyle
 

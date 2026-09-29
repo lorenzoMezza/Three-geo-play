@@ -37,7 +37,6 @@ const BATCHING_SUPPORTED =
  *
  * Falls back to one `THREE.Mesh` per tile when batching is unavailable
  * (three < r170) or the material has a custom shader, which cannot be batched.
- * @private
  */
 export class MeshBatches {
 

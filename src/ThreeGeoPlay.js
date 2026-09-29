@@ -14,89 +14,35 @@ const now = typeof performance !== 'undefined' ? () => performance.now() : () =>
 const FLAT_PICK_TOLERANCE = 0.01;
 
 /**
- * Main entry point for ThreeGeoPlay — a geographic map renderer built on Three.js.
- *
- * Instantiate once with your Three.js scene, camera and renderer, then call
- * {@link ThreeGeoPlay#start} to begin loading tiles and
- * {@link ThreeGeoPlay#onFrameUpdate} inside your animation loop to keep the map
- * in sync with the camera / follow-target.
- *
- * All map meshes live under a single `THREE.Group` (see {@link ThreeGeoPlay#getMapGroup}),
- * which is yours to place: parent it anywhere, move, rotate or scale it, give
- * it `layers`, `visible` or a `renderOrder` for the whole map. The "world"
- * coordinates of the API ({@link latLonToWorld}, {@link moveMapOriginToPosition},
- * …) are expressed in that group's space — the scene's world space as long as
- * the group is not transformed — while the follow target is tracked through
- * its world position, whatever the transform.
- *
- * @example
- * const geoPlay = new ThreeGeoPlay(scene, camera, renderer, {
- *     tileUrl:      'https://tiles.openfreemap.org/planet',   // TileJSON, style, template or mapbox://
- *     originLatLon: { lat: 41.8902, lon: 12.4922 },
- *     zoomLevel:    14,
- * });
- * geoPlay.start();
- *
- * function animate() {
- *   requestAnimationFrame(animate);
- *   geoPlay.onFrameUpdate();
- *   renderer.render(scene, camera);
- * }
- * animate();
- *
- * Events (`geoPlay.addEventListener(type, listener)`):
- *  - `sourceload`  — `{ source }`: the tile source is resolved (see {@link getTileSource});
- *  - `sourceerror` — `{ error, willRetry }`: the tile source could not be loaded
- *    (e.g. wrong access token); `willRetry` is false for configuration errors;
- *  - `tileload`    — `{ tile }`: a tile appeared on screen (see {@link getTiles});
- *  - `tileunload`  — `{ tile }`: a tile left the render area and was removed.
- *
- * @class
- * @extends THREE.EventDispatcher
+ * The map: loads the tiles around a target, applies config and style changes
+ * once per frame ({@link onFrameUpdate}) and answers queries (heights, picking,
+ * coordinates). Every map mesh is in one group ({@link getMapGroup}), yours to
+ * place; the "world" coordinates of the API are in that group's space.
+ * Events: `sourceload`, `sourceerror`, `tileload`, `tileunload` (see API.md).
  */
 export class ThreeGeoPlay extends THREE.EventDispatcher {
 
-    /** @type {boolean} */
-    #isStarted = false;
-
-    /** @type {boolean} */
-    #isDestroyed = false;
-
-    /** @type {number} */
-    #lastFollowUpdate = -Infinity;
-
-    /** @type {MapConfig} */
-    #mapConfig = null;
-
-    /** @type {THREE.Scene} */
-    #scene = null;
-
-    /** @type {THREE.Camera} */
-    #camera = null;
-
-    /** @type {THREE.WebGLRenderer} */
-    #renderer = null;
-
-    /**
-     * The Three.js Object3D whose position the map tracks in {@link ViewMode.FOLLOW_TARGET} mode.
-     * Defaults to the camera passed to the constructor.
-     * @type {THREE.Object3D}
-     */
-    #followTarget = null;
-
-    /** @type {TileManager|null} */
+    #mapConfig;
+    #scene;
+    #camera;
+    #renderer;
+    /** The map group, parent of every map mesh. @type {THREE.Group} */
+    #mapGroup;
+    /** Created by start(). @type {TileManager|null} */
     #tileManager = null;
 
-    /** @type {THREE.Group} */
-    #mapGroup = null;
+    #isStarted   = false;
+    #isDestroyed = false;
+
+    /** Object whose position the map follows in FOLLOW_TARGET mode (the camera by default). */
+    #followTarget;
+    #lastFollowUpdate = -Infinity;
 
     /** Center requested in MANUAL mode before the map was started (`null` = origin). */
     #manualCenter = null;
 
-    /** @type {MapStyle|null} */
-    #lastStyle = null;
-
-    /** @type {number} */
+    /** Style, and its change stamp, last applied to the tiles. */
+    #lastStyle      = null;
     #lastStyleStamp = -1;
 
     #tmpVec = new THREE.Vector3();
@@ -127,25 +73,12 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
 
     // ─── Private helpers ─────────────────────────────────────────────────────
 
-    /**
-     * @param {THREE.Scene}         scene
-     * @param {THREE.Camera}        camera
-     * @param {THREE.WebGLRenderer} renderer
-     * @throws {Error}
-     * @private
-     */
     #validateConstructorParams(scene, camera, renderer) {
         if (!scene)    throw new Error("ThreeGeoPlay: threeScene is required");
         if (!camera)   throw new Error("ThreeGeoPlay: threeCamera is required");
         if (!renderer) throw new Error("ThreeGeoPlay: threeRenderer is required");
     }
 
-    /**
-     * @param {number} lat
-     * @param {number} lon
-     * @throws {Error}
-     * @private
-     */
     #validateLatLon(lat, lon) {
         if (typeof lat !== 'number' || isNaN(lat)) throw new Error(`ThreeGeoPlay: Invalid latitude: ${lat}. Must be a number`);
         if (lat < -90 || lat > 90)                 throw new Error(`ThreeGeoPlay: Invalid latitude: ${lat}. Must be between -90 and 90`);
@@ -155,7 +88,6 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
 
     /**
      * Switches to MANUAL mode (with a warning) if the map is following a target.
-     * @private
      */
     #ensureManualMode() {
         if (this.#mapConfig.viewMode === ViewMode.FOLLOW_TARGET) {
@@ -167,7 +99,6 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
     /**
      * Position of the follow target in the map group's space (X/Z).
      * @returns {{ x: number, z: number }}
-     * @private
      */
     #followTargetPosition() {
         const p = this.#followTarget.getWorldPosition(this.#tmpVec);
@@ -180,7 +111,6 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
 
     /**
      * Creates a tile manager for the current config and loads the first tiles.
-     * @private
      */
     #createTileManager(center) {
         this.#tileManager = new TileManager(this.#mapConfig, this.#mapGroup, (type, detail) => this.dispatchEvent({ type, ...detail }));

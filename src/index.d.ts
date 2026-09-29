@@ -114,7 +114,10 @@ export interface MapTile {
 export interface TileFeature {
     /** Layer of the vector tile (`'building'`, `'poi'`, …). */
     sourceLayer: string;
+    /** Id from the tile data: 0 for most OpenMapTiles features, so it may be shared. */
     id: number;
+    /** Unique name of the feature on the map (`zoom/x/y/sourceLayer/index`). */
+    key: string;
     type: 'point' | 'line' | 'polygon';
     properties: Record<string, string | number | boolean>;
     /** Parts (points, lines or polygon rings — exterior then holes) as flat `[x0, z0, x1, z1, …]` arrays. */
@@ -131,7 +134,10 @@ export interface MapFeature {
     style: BaseFeatureType;
     /** Layer of the vector tile. */
     sourceLayer: string;
+    /** Id from the tile data: 0 for most OpenMapTiles features, so it may be shared. */
     id: number;
+    /** Unique name of the feature on the map: compare it to tell which feature was picked. */
+    key: string;
     properties: Record<string, string | number | boolean>;
     /** Tile the feature was hit in. */
     tile: MapTile;
@@ -146,7 +152,10 @@ export interface PickedFeature extends MapFeature {
 
 /** The vector tile feature passed to a `featureStyle` function. */
 export interface StyledFeature {
+    /** Id from the tile data: 0 for most OpenMapTiles features, so it may be shared. */
     id: number;
+    /** Unique name of the feature on the map, as in `MapFeature.key`. */
+    key: string;
     properties: Record<string, string | number | boolean>;
     /** Layer of the vector tile. */
     sourceLayer: string;
@@ -215,7 +224,7 @@ export declare class BaseFeatureType {
      * Data-driven styling: called for every feature of this type, returns overrides (or nothing).
      * Assign it again, or call `MapStyle.refresh()`, when what it returns changes.
      * @example
-     * roads.primary.featureStyle = ({ id }) => (id === selectedId ? { material: highlight } : null);
+     * roads.primary.featureStyle = ({ key }) => (key === selectedKey ? { material: highlight } : null);
      */
     featureStyle: ((feature: StyledFeature) => FeatureStyleOverrides | null | undefined | void) | null;
     /** Alias of `isVisible`, named like `THREE.Object3D.visible`. */
