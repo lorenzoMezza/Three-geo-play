@@ -48,6 +48,22 @@ renderer.setAnimationLoop(() => {
 
 The map loads around the camera as it moves. Show the provider's credits from `geo.getTileSource().attribution`.
 
+## Tile providers
+
+Pass a TileJSON, a MapLibre / Mapbox style URL, a `{z}/{x}/{y}` template or a `mapbox://` URL as `tileUrl`:
+
+| Provider | `tileUrl` | Key |
+|---|---|---|
+| OpenFreeMap | `https://tiles.openfreemap.org/planet` | no |
+| VersaTiles | `https://tiles.versatiles.org/tiles/osm/tiles.json` | no |
+| Carto | `https://basemaps.cartocdn.com/gl/positron-gl-style/style.json` | no |
+| MapTiler | `https://api.maptiler.com/tiles/v3/tiles.json?key=…` | yes |
+| Stadia Maps | `https://tiles.stadiamaps.com/styles/alidade_smooth.json` | yes (not on localhost) |
+| Mapbox | `mapbox://mapbox.mapbox-streets-v8` with `accessToken: 'pk.…'` | yes |
+| Your own server | tileserver-gl, martin, `pmtiles serve`, static `.pbf` files | — |
+
+The OpenMapTiles, Mapbox Streets v8 and Shortbread schemas are detected automatically; map any other with a [`tileSchema`](https://github.com/lorenzoMezza/Three-geo-play/blob/main/docs/GUIDE.md#tile-providers) function.
+
 ## Features
 
 - **3D city from OpenStreetMap** — roads, water, land use and buildings with true-scale heights
