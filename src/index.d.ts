@@ -19,6 +19,8 @@ export declare const TileSchema: {
     readonly OPENMAPTILES: 'openmaptiles';
     /** Mapbox Streets v8. */
     readonly MAPBOX: 'mapbox';
+    /** Shortbread 1.0 — VersaTiles. */
+    readonly SHORTBREAD: 'shortbread';
 };
 export type TileSchema = typeof TileSchema[keyof typeof TileSchema];
 

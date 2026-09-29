@@ -359,7 +359,7 @@ style.transportationLayer.primary.lineWidthMeters = 14;
 style.transportationLayer.primary.outlineMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
 ```
 
-Lines are layered like a printed map within `[renderingOrder, renderingOrder + 1)`: tunnels below the ground level, bridges above it (from the `brunnel` / `structure` and `layer` attributes), outlines below fills, wider roads above narrower ones, ramps under the road they merge into.
+Lines are layered like a printed map within `[renderingOrder, renderingOrder + 1)`: tunnels below the ground level, bridges above it (from the `brunnel` / `structure` / `bridge` / `tunnel` and `layer` attributes), outlines below fills, wider roads above narrower ones, ramps under the road they merge into.
 
 ### BuildingLayer
 
@@ -583,7 +583,7 @@ Passed to `featureStyle`: `{ id, key, properties, sourceLayer, type }` (`key` as
 |---|---|
 | `ViewMode` | `FOLLOW_TARGET` (`'follow_target'`) — tiles follow the target · `MANUAL` (`'manual'`) — tiles stay where you put them |
 | `TileLayout` | `CIRCULAR` (`'circular'`) · `GRID` (`'grid'`) |
-| `TileSchema` | `AUTO` (`'auto'`, detects the schema from the source layers) · `OPENMAPTILES` (MapTiler, OpenFreeMap, most MapLibre sources) · `MAPBOX` (Mapbox Streets v8) |
+| `TileSchema` | `AUTO` (`'auto'`, detects the schema from the source layers) · `OPENMAPTILES` (OpenFreeMap, MapTiler, Carto, Stadia, most MapLibre sources) · `MAPBOX` (Mapbox Streets v8) · `SHORTBREAD` (Shortbread 1.0: VersaTiles) |
 
 Each enum is also a TypeScript type of its values.
 
@@ -657,3 +657,4 @@ Without it the library warns once and coinciding faces may be blended twice. Set
 | Building material with `opacity < 1` but `transparent: false` | One console warning. |
 | `zoomLevel` outside the source's range | The nearest served level is used, at the same scale; one console warning. |
 | Web workers blocked (e.g. a Content-Security-Policy without `worker-src blob:`) | Tiles are built on the main thread; one console warning. |
+| The source announces none of the layers of the built-in schemas | Nothing is drawn; one console warning (map its layers with a `tileSchema` function). |

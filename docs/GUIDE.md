@@ -62,7 +62,7 @@ Materials are used exactly as you configure them: ThreeGeoPlay never changes the
 
 Roads and waterways are stacked like on a printed map, inside the `renderingOrder` of their type:
 
-- **Bridges above, tunnels below** — the OpenMapTiles `brunnel` / `layer` attributes (Mapbox `structure` / `layer`) put a flyover on top of the roads it crosses; bridge and tunnel sections end flat.
+- **Bridges above, tunnels below** — the OpenMapTiles `brunnel` / `layer` attributes (Mapbox `structure` / `layer`, Shortbread `bridge` / `tunnel`) put a flyover on top of the roads it crosses; bridge and tunnel sections end flat.
 - **Outlines below fills** — at a junction the fills merge, an outline never cuts through another road.
 - **Wider roads on top** — a minor road joins a major one cleanly even when their colours differ; ramps (`ramp`) slip under the road they merge into.
 
@@ -263,7 +263,7 @@ Set them in the constructor options, with `config.set({ … })`, or one by one o
 |---|---|---|
 | `tileUrl` | Tile source: `{z}/{x}/{y}` template, TileJSON, MapLibre / Mapbox style or `mapbox://` URL (see below) | required |
 | `accessToken` | Mapbox access token | `''` |
-| `tileSchema` | `TileSchema.AUTO`, `OPENMAPTILES`, `MAPBOX` or a custom function | `AUTO` |
+| `tileSchema` | `TileSchema.AUTO`, `OPENMAPTILES`, `MAPBOX`, `SHORTBREAD` or a custom function | `AUTO` |
 | `originLatLon` | `{ lat, lon }` placed at the world origin | Rome |
 | `zoomLevel` | Integer zoom level. OpenMapTiles providers usually stop at 14, Mapbox at 16: a level the source does not serve is replaced by the nearest one it serves, at the same scale | `18` |
 | `unitsPerMeter` | World units per metre (e.g. `1` for a scene in metres); when set, `tileWorldSize` follows from it | `null` |
@@ -310,11 +310,11 @@ Invalid values and unknown option names throw an `Error`. `originLatLon` and `wo
 
 ## Tile Providers
 
-`tileUrl` accepts what MapLibre and Mapbox use to describe a vector source; the schema of the tiles is detected automatically.
+`tileUrl` accepts what MapLibre and Mapbox use to describe a vector source. Three tile schemas are built in and detected automatically: OpenMapTiles, Mapbox Streets v8 and Shortbread.
 
 ```js
-// OpenMapTiles schema — MapTiler, OpenFreeMap, self-hosted tileservers
-config.tileUrl = 'https://tiles.openfreemap.org/planet';                          // TileJSON
+// OpenMapTiles schema — OpenFreeMap, MapTiler, Carto, Stadia, self-hosted tileservers
+config.tileUrl = 'https://tiles.openfreemap.org/planet';                          // TileJSON, free, no key
 config.tileUrl = 'https://api.maptiler.com/tiles/v3/tiles.json?key=YOUR_KEY';     // TileJSON
 config.tileUrl = 'https://your-server/{z}/{x}/{y}.pbf';                           // template
 
@@ -324,7 +324,12 @@ config.tileUrl = 'https://tiles.openfreemap.org/styles/liberty';
 // Mapbox Streets v8
 config.set({ tileUrl: 'mapbox://mapbox.mapbox-streets-v8', accessToken: 'pk.…', zoomLevel: 16 });
 config.set({ tileUrl: 'mapbox://styles/mapbox/streets-v12', accessToken: 'pk.…' });
+
+// Shortbread schema — VersaTiles (free, no key)
+config.tileUrl = 'https://tiles.versatiles.org/tiles/osm/tiles.json';
 ```
+
+Most sources stop at zoom 14 (OpenMapTiles, Shortbread) or 16 (Mapbox): a higher `zoomLevel` uses their highest level at the same scale. If a source has none of the layers of these schemas, ThreeGeoPlay warns once and draws nothing: map its layers with a `tileSchema` function (below).
 
 Several URLs in a TileJSON are used round-robin. Gzip-compressed `.pbf` files served without a `Content-Encoding` header are handled too. PMTiles archives are not read directly: serve them as `{z}/{x}/{y}` (e.g. with `pmtiles serve` or martin).
 

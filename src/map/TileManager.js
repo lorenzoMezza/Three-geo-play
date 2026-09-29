@@ -4,6 +4,7 @@ import { geoToTileXYFloat, tileSizeInMeters } from '../tiles/projection.js';
 import { TileLayout }                         from '../config/MapConfig.js';
 import fetchTileData                          from '../tiles/fetchTileData.js';
 import { isTileTemplate, resolveTileSource, templateSource, redactToken } from '../tiles/tileSource.js';
+import { schemaReadsLayer }                   from '../tiles/tileSchemas.js';
 import { Tile }                               from './Tile.js';
 import { MeshBatches }                        from './MeshBatches.js';
 import { GeometryBuilder }                    from './GeometryBuilder.js';
@@ -545,6 +546,7 @@ export class TileManager {
             this.#sourceAttempts = 0;
             this.#source         = source;
             this.#checkZoomRange();
+            this.#checkSchema();
             this.#emit('sourceload', { source: this.source });
             this.#drainFetchQueue();
         }, err => {
@@ -576,6 +578,15 @@ export class TileManager {
         // Tiles of another zoom cover another area: keep the scale (unitsPerMeter does it by itself).
         if (cfg.unitsPerMeter === null) cfg.tileWorldSize *= 2 ** (cfg.zoomLevel - zoom);
         cfg.zoomLevel = zoom;
+    }
+
+    /** Warns when the source announces its layers and the schema reads none of them: nothing would be drawn. */
+    #checkSchema() {
+        const schema = this.#config.tileSchema;
+        const layers = this.#source.layers;
+        if (layers.length === 0 || layers.some(name => schemaReadsLayer(schema, name))) return;
+        const list = layers.slice(0, 6).join(', ') + (layers.length > 6 ? ', …' : '');
+        console.warn(`ThreeGeoPlay: the tile source has none of the layers of the OpenMapTiles, Mapbox Streets or Shortbread schemas (it has ${list}), so nothing is drawn. Map its layers onto the style with MapConfig.tileSchema.`);
     }
 
     #tileUrl(x, y) {

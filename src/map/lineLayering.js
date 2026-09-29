@@ -34,7 +34,9 @@ const LINE_LAYERS = ['transportation', 'waterway'];
 export function lineLevel(properties) {
     const layer = Number(properties.layer);
     let level = Number.isFinite(layer) ? Math.round(layer) : 0;
-    const structure = properties.brunnel ?? properties.structure;
+    // OpenMapTiles `brunnel`, Mapbox `structure`, Shortbread `bridge` / `tunnel` flags.
+    const structure = properties.brunnel ?? properties.structure
+        ?? (properties.bridge === true ? 'bridge' : properties.tunnel === true ? 'tunnel' : undefined);
     if (structure === 'bridge' && level < 1) level = 1;
     else if (structure === 'tunnel' && level > -1) level = -1;
     return Math.max(-MAX_LEVEL, Math.min(MAX_LEVEL, level));
