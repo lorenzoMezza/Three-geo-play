@@ -202,7 +202,8 @@ export declare class BaseFeatureType {
     renderingOrder: number;
     /**
      * Casts shadows (default `false`; `true` for buildings). Shadows need
-     * `renderer.shadowMap.enabled` and a light with `castShadow`.
+     * `renderer.shadowMap.enabled` and a light with `castShadow`. Buildings with a
+     * transparent material (glass) let the light through and cast none.
      */
     castShadow: boolean;
     /**

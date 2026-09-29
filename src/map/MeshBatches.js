@@ -50,6 +50,9 @@ export class MeshBatches {
     /** Batch or per-tile mesh behind each drawn object, for {@link featureAt}. @type {WeakMap<THREE.Object3D, Batch|MeshHandle>} */
     #owners = new WeakMap();
 
+    /** Meshes drawing buildings, for {@link updateShadowCasting}. @type {Set<THREE.Mesh>} */
+    #buildingMeshes = new Set();
+
     /**
      * @param {THREE.Object3D} root - Parent of the batched meshes.
      */
@@ -71,6 +74,7 @@ export class MeshBatches {
         if (!BATCHING_SUPPORTED || material.isShaderMaterial) {
             const handle = new MeshHandle(descriptor, geometry, tileObject, { ranges, tile });
             this.#owners.set(handle.object, handle);
+            if (descriptor.kind === 'building') this.#buildingMeshes.add(handle.object);
             return handle;
         }
 
@@ -84,6 +88,7 @@ export class MeshBatches {
             batch = new Batch(descriptor, this.#root, () => this.#batches.delete(key));
             this.#batches.set(key, batch);
             this.#owners.set(batch.mesh, batch);
+            if (descriptor.kind === 'building') this.#buildingMeshes.add(batch.mesh);
         }
         return batch.add(geometry, { ranges, tile });
     }
@@ -98,6 +103,28 @@ export class MeshBatches {
         return owner ? owner.featureAt(intersection) : null;
     }
 
+    /**
+     * Glass lets the light through: buildings cast shadows only while their
+     * material is opaque — otherwise the ground seen through them shows the
+     * shadow of every inner wall. Called every frame, since a material can
+     * become transparent at any time.
+     */
+    updateShadowCasting() {
+        for (const mesh of this.#buildingMeshes) {
+            if (!mesh.parent) {
+                this.#buildingMeshes.delete(mesh);   // removed with its tile or batch
+                continue;
+            }
+            const { material } = mesh;
+            mesh.castShadow = mesh.userData.castShadow && !(material.transparent && material.opacity < 1);
+        }
+    }
+
+    /** Gives memory back from batches that are mostly free space (see Batch#trim). Call it while the map is idle. */
+    trim() {
+        for (const batch of this.#batches.values()) batch.trim();
+    }
+
     /** Number of batched meshes (one draw call each). */
     get size() {
         return this.#batches.size;
@@ -106,6 +133,7 @@ export class MeshBatches {
     dispose() {
         for (const batch of [...this.#batches.values()]) batch.dispose();
         this.#batches.clear();
+        this.#buildingMeshes.clear();
     }
 }
 
@@ -173,6 +201,23 @@ class Batch {
             ? this.mesh.getGeometryRangeAt(entry.geometryId).start
             : this.mesh._geometryInfo[entry.geometryId].start;
         return featureOfVertex(entry, intersection.faceIndex * 3 - start);
+    }
+
+    /**
+     * Gives memory back when more than half of the batch is left by removed tiles:
+     * compacts it and shrinks it to fit. Meant for when the map is idle, as it uploads the whole batch.
+     */
+    trim() {
+        if (this.#freedVertices <= this.#capacity / 2) return;
+        this.mesh.optimize();
+        this.#freedVertices = 0;
+        const used = this.#capacity - this.mesh.unusedVertexCount;
+        let capacity = this.#capacity;
+        while (capacity > INITIAL_VERTICES && capacity / 2 >= used * 1.5) capacity /= 2;
+        if (capacity < this.#capacity) {
+            this.mesh.setGeometrySize(capacity, capacity * 2);
+            this.#capacity = capacity;
+        }
     }
 
     dispose() {
@@ -252,6 +297,7 @@ class MeshHandle {
 function setUpDraw(mesh, { kind, renderOrder, castShadow, receiveShadow, depthPrepass }) {
     mesh.userData.kind         = kind;
     mesh.userData.threeGeoPlay = true;
+    mesh.userData.castShadow   = !!castShadow;   // the style's setting (see MeshBatches#updateShadowCasting)
     mesh.castShadow    = !!castShadow;
     mesh.receiveShadow = !!receiveShadow;
     if (kind === 'building') {
