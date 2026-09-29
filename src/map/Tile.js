@@ -296,7 +296,9 @@ export class Tile {
                 shadings.set(style, shading);
             }
             const tint = shading.tint;
-            const tone = roofVariation(height, style.colorVariation);
+            // Keyed by the drawn height, so roofs drawn at the same height (overlapping
+            // parts, or every roof when the buildings are flattened) share one tone.
+            const tone = roofVariation(height * style.height, style.colorVariation);
             roof.r  = tint.r * tone * color.r;
             roof.g  = tint.g * tone * color.g;
             roof.b  = tint.b * tone * color.b;

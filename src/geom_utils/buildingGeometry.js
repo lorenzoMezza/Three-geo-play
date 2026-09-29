@@ -197,12 +197,12 @@ export class BuildingGeometryBuilder {
 
 /**
  * Brightness factor in `[1 - amount, 1]` that gives neighbouring roofs slightly
- * different tones. It depends only on the height of the roof — stable across
- * tiles and rebuilds, and equal for every part whose roof is at that height,
- * so roofs that coincide (overlapping parts, duplicated footprints) always have
- * the same colour and never flicker.
+ * different tones. It depends only on the height the roof is drawn at — stable
+ * across tiles and rebuilds, and equal for every part whose roof is at that
+ * height, so roofs that coincide (overlapping parts, duplicated footprints,
+ * every roof of flattened buildings) always have the same colour and never flicker.
  *
- * @param {number} height - Metres.
+ * @param {number} height - Drawn roof height in metres (OSM height × exaggeration).
  * @param {number} amount - 0–1.
  * @returns {number}
  */
