@@ -100,7 +100,8 @@ const NEON_COMMON = /* glsl */ `
 /**
  * Extends a built-in material: `diffuse` runs after `color_fragment` (to change
  * `diffuseColor`), `glow` before `opaque_fragment` (to add light to `outgoingLight`).
- * Fog, tone mapping and colour space are applied afterwards as usual.
+ * Fog, tone mapping and colour space are applied afterwards as usual. Called by
+ * the constructors, so copies made by `clone()` are extended as well.
  */
 function extend(material, key, { uniforms = {}, head = '', diffuse = '', glow = '', normal = false }) {
     const varyings = `varying vec3 vNeonWorld;\n${normal ? '#define NEON_NORMAL\nvarying vec3 vNeonNormal;' : ''}`
@@ -115,6 +116,7 @@ function extend(material, key, { uniforms = {}, head = '', diffuse = '', glow = 
             .replace('#include <opaque_fragment>', `${glow}\n#include <opaque_fragment>`)
     }
     material.customProgramCacheKey = () => key
+    material.onBeforeRender = updateShared   // (renderer, …): keeps the shared uniforms up to date
 }
 
 // ─── Circuit texture ────────────────────────────────────────────────────────
@@ -187,7 +189,6 @@ export class NeonGroundMaterial extends THREE.MeshBasicMaterial {
         })
     }
     copy(source) { super.copy(source); this.accent.copy(source.accent); return this }
-    onBeforeRender(renderer) { updateShared(renderer) }
 }
 
 /** Land use: the circuit texture, sampled in metres, lit up by the pulse. */
@@ -206,7 +207,6 @@ export class NeonCircuitMaterial extends THREE.MeshBasicMaterial {
         })
     }
     copy(source) { super.copy(source); this.accent.copy(source.accent); return this }
-    onBeforeRender(renderer) { updateShared(renderer) }
 }
 
 /** Parks and natural areas: a procedural hexagon grid (14 m cells). */
@@ -227,7 +227,6 @@ export class NeonHexMaterial extends THREE.MeshBasicMaterial {
         })
     }
     copy(source) { super.copy(source); this.accent.copy(source.accent); return this }
-    onBeforeRender(renderer) { updateShared(renderer) }
 }
 
 /** Roads and waterway casings: a neon tube with light flowing through the city, lit by the pulse. */
@@ -246,7 +245,6 @@ export class NeonLineMaterial extends THREE.MeshBasicMaterial {
         })
     }
     copy(source) { super.copy(source); this.flow.value = source.flow.value; return this }
-    onBeforeRender(renderer) { updateShared(renderer) }
 }
 
 /**
@@ -325,7 +323,6 @@ export class NeonBuildingMaterial extends THREE.MeshLambertMaterial {
         if (source.unlit !== this.unlit) { this.unlit = source.unlit; buildingShader(this, this.unlit) }
         return this
     }
-    onBeforeRender(renderer) { updateShared(renderer) }
     /** The same look, lit by the sun of the scene or with a fixed shading. */
     withLighting(lit) { return new NeonBuildingMaterial({ ...paramsOf(this), unlit: !lit }) }
 }
