@@ -166,6 +166,8 @@ const hit = geo.pickFeature(raycaster);
 if (hit?.layer === 'building') console.log(hit.id, hit.properties.render_height, hit.intersection.point);
 ```
 
+It raycasts the map geometry, so its cost grows with the detail on screen: a few milliseconds on a zoom-16 map, tens of milliseconds on large zoom-14 tiles of a dense city. Call it on clicks, or throttle it for hover effects.
+
 #### `getFeatureAt(intersection: THREE.Intersection): MapFeature | null`
 
 The feature drawn at an intersection of your own raycast with a map mesh; `null` for ground planes and objects that are not part of the map.
@@ -241,7 +243,7 @@ geo.getMapConfig().set({ zoomLevel: 16, renderDistance: 6, unitsPerMeter: 1 });
 | `tileUrl` | `string` | `''` (required) | Reloads every tile. A `{z}/{x}/{y}` template, a TileJSON URL, a MapLibre / Mapbox style URL or a `mapbox://` URL — see [Tile sources](#tile-sources-and-schemas). |
 | `accessToken` | `string` | `''` | Reloads every tile. Mapbox token for `mapbox://` URLs and `api.mapbox.com` tiles. |
 | `tileSchema` | `TileSchema \| TileSchemaFunction` | `TileSchema.AUTO` | Rebuilds the tiles from cached data. |
-| `zoomLevel` | integer 0–24 | `18` | Reloads every tile. Use a zoom your provider serves (OpenMapTiles providers usually stop at 14, Mapbox at 16). |
+| `zoomLevel` | integer 0–24 | `18` | Reloads every tile. OpenMapTiles providers usually stop at 14, Mapbox at 16: a level the source does not serve is replaced by the nearest one it serves, at the same scale (with a warning). |
 | `renderDistance` | integer ≥ 0 | `4` | Loads / unloads tiles. Tiles loaded in each direction from the centre tile. |
 | `tileLayout` | `TileLayout` | `CIRCULAR` | Loads / unloads tiles. Circular or square render area. |
 | `unitsPerMeter` | `number \| null` | `null` | Rescales the tiles. World units per metre; while set, `tileWorldSize` is derived from it and follows zoom and origin changes. |
@@ -252,7 +254,7 @@ geo.getMapConfig().set({ zoomLevel: 16, renderDistance: 6, unitsPerMeter: 1 });
 | `followUpdateInterval` | ms ≥ 0 | `0` | Minimum time between follow updates (`0` = every frame). |
 | `mapStyle` | `MapStyle` | `new MapStyle()` | Rebuilds the tiles from cached data. Same as `setMapStyle()`. |
 | `showTileBorders` | `boolean` | `false` | Draws a border around every tile (debugging). |
-| `occludeBelowGround` | `boolean` | `true` | The ground hides what is below it (an invisible depth plane drawn first). `false` lets you see through it, e.g. with your own terrain. |
+| `occludeBelowGround` | `boolean` | `true` | The ground hides what is below it (an invisible depth plane at the map's ground, drawn first). `false` lets you see through it, e.g. with your own terrain. |
 | `zoomScaleFactor` | `number` (read-only) | — | Scale of the current zoom level relative to zoom 18. |
 | `pbfTileProviderZXYurl` | `string` | — | Deprecated alias of `tileUrl`. |
 
@@ -307,7 +309,15 @@ Applies the style again on the next frame. Property changes are detected automat
 
 #### `getStyleLayerByName(name: StyleLayerName): layer | null`
 
-The layer with the given name (see the table), or `null`.
+The layer with the given name (see the table), or `null` for an unknown name. In TypeScript the result is typed by the name (`StyleLayers[name]`).
+
+#### `forEachType(callback: (type, layerName, typeName) => void): void`
+
+Calls `callback` for every feature type of every layer; the single-type layers (background, building, shadow) are passed as their own type, with `typeName` equal to the layer name. Handy to change every material at once:
+
+```js
+style.forEachType(type => { if (type.material) type.material.clippingPlanes = planes; });
+```
 
 ---
 
@@ -323,7 +333,7 @@ Properties shared by every type and single-type layer.
 |---|---|---|
 | `material` | `THREE.Material \| null` | Fill material, used as is. Map geometry faces up (+Y), so `THREE.FrontSide` works. Normals are generated for lit materials, vertex colours for materials with `vertexColors`. |
 | `isVisible` / `visible` | `boolean` | Whether the type is drawn. `setVisible(v)` does the same. |
-| `Y` | `number` | Height the type is drawn at, in world units (tiny offsets are used by default). |
+| `Y` | `number` | Height the type is drawn at, in world units (default `0`: flat layers are stacked by `renderingOrder`, not by height). |
 | `renderingOrder` / `renderOrder` | `number` | Three.js render order of the type (negative recommended). Flat layers are stacked by it — see [Rendering model](#rendering-model). |
 | `castShadow` | `boolean` | Casts shadows (default `false`; `true` for buildings). |
 | `receiveShadow` | `boolean` | Receives shadows (default `false`; `true` for buildings). Only lit materials show them; the default flat layers get their ground shadows from the [`shadowLayer`](#shadowlayer). |
@@ -366,9 +376,8 @@ Lines are layered like a printed map within `[renderingOrder, renderingOrder + 1
 | `featureStyle` | `(feature) => BuildingFeatureStyle \| null` | `null` | Per-building colour, height, visibility or material — see [Data-driven styling](#data-driven-styling). |
 | `castShadow` / `receiveShadow` | `boolean` | `true` | Shadows. |
 | `Y` | `number` | `0` | Base height of the buildings. |
-| `allowDetails` | `boolean` | `false` | Reserved; no effect yet. |
 
-Chainable setters: `setMaterial(m)`, `setY(y)`, `setHeight(h)`, `setAllowDetails(v)`. `renderingOrder` is not applied to buildings. `getTypeByName()` returns the layer itself.
+Chainable setters: `setMaterial(m)`, `setY(y)`, `setHeight(h)`. (`allowDetails` / `setAllowDetails()` are deprecated and have no effect.) `renderingOrder` is not applied to buildings. `getTypeByName()` returns the layer itself.
 
 ```js
 const buildings = style.buildingLayer;
@@ -398,11 +407,12 @@ Methods and properties shared by the multi-type layers.
 | Member | Description |
 |---|---|
 | `isVisible` / `visible` | Master switch: `false` hides the whole layer; `true` shows each type according to its own `isVisible` (per-type settings are kept). |
+| `types` | Every type of the layer, by class name (a frozen object): `Object.values(layer.types)`. |
 | `getTypeByName(name)` | The type with this class name, or `null`. |
 | `setAllMaterials(material)` | Sets `material` on every type. |
 | `setVisibleAll(visible)` | Sets `isVisible` on every type. |
 | `setReceiveShadowAll(receive)` | Sets `receiveShadow` on every type (for lit materials). |
-| `static admittedClasses` | `Set` of the class names the layer handles (not on `WaterwayLayer`). |
+| `static admittedClasses` | `Set` of the class names the layer has a type for. |
 
 ### TransportationLayer
 
@@ -413,13 +423,13 @@ Methods and properties shared by the multi-type layers.
 | `motorway`, `trunk`, `primary`, `secondary`, `tertiary` | yes | 0.1375, 0.125, 0.1125, 0.095, 0.075 |
 | `minor`, `service`, `pedestrian`, `path` | yes | 0.055, 0.04, 0.03, 0.02 |
 | `track`, `raceway`, `busway`, `bus_guideway`, `rail`, `transit`, `pier`, `ferry` | no | 0.025–0.065 |
-| `trunk_construction`, `primary_construction`, `secondary_construction`, `tertiary_construction`, `minor_construction`, `service_construction`, `track_construction`, `path_construction`, `raceway_construction` | no | slightly narrower than the finished road |
+| `motorway_construction`, `trunk_construction`, `primary_construction`, `secondary_construction`, `tertiary_construction`, `minor_construction`, `service_construction`, `track_construction`, `path_construction`, `raceway_construction` | no | slightly narrower than the finished road |
 
 Default materials: fill `#9c9c9c`, outline `#3f3f3f` (outline width 0.03).
 
 ### WaterwayLayer
 
-`style.waterwayLayer` — rivers and streams drawn as lines: `river`, `stream`, `tidal_channel`, `flowline`, `canal`, `drain`, `ditch`, `pressurised`. Same extra methods as `TransportationLayer` (except `setVisible`). Default fill `#3a8ab8`, outline `#1a3f60`.
+`style.waterwayLayer` — rivers and streams drawn as lines: `river`, `stream`, `tidal_channel`, `flowline`, `canal`, `drain`, `ditch`, `pressurised`. Same extra methods as `TransportationLayer` (except `setVisible`): both are line layers (`LineLayer` in the type declarations). Default fill `#3a8ab8`, outline `#1a3f60`.
 
 ### WaterLayer
 
@@ -483,6 +493,7 @@ A tile on screen, from `getTiles()`, `tileload` and `tileunload`. Frozen.
 ```js
 geo.addEventListener('tileload', ({ tile }) => {
   for (const poi of tile.getFeatures('poi')) {
+    if (poi.properties.rank > 3) continue;     // only the main places
     const [x, z] = poi.geometry[0];
     const pin = new THREE.Mesh(pinGeometry, pinMaterial);
     pin.position.set(x, 0, z);
@@ -491,6 +502,8 @@ geo.addEventListener('tileload', ({ tile }) => {
   }
 });
 ```
+
+Tiles of big cities hold a lot of data: a zoom-14 OpenMapTiles tile of central Rome has about 6000 POIs. Filter the features you need (OpenMapTiles `rank`, `class`), or draw many objects with one `THREE.InstancedMesh`.
 
 ### TileFeature
 
@@ -607,7 +620,7 @@ geo.getMapConfig().tileSchema = (sourceLayer, props) => {
 ## Rendering model
 
 - **Flat layers** (background, land use, land cover, water, waterways, roads) lie on the ground plane. They are drawn without writing depth — only during their own draw, the materials are not modified — and stacked by `renderingOrder`; they are still depth tested, so buildings and your objects in front of them always hide them. Three.js draws transparent materials after opaque ones, so a transparent flat layer ends up above every opaque one.
-- **Ground occluder**: with `occludeBelowGround` an invisible plane writes the ground depth before anything else is drawn, so the map hides what is below it like a solid floor.
+- **Ground occluder**: with `occludeBelowGround` an invisible plane writes the ground depth before anything else is drawn, so the map hides what is below it like a solid floor. It sits at the map's ground (`Y` 0), pushed back by a polygon offset of one pixel of slope, so that what lies on the ground — the flat layers, flattened buildings, your own markers at `Y` 0 — never flickers against it. A surface of yours just below the map (a table under a diorama, your own terrain) is therefore not hidden near the map: draw it before the map instead (`renderOrder = -2000`), and the map layers are painted over it.
 - **Buildings** are solid, depth-tested meshes with exact normals; they interact with your objects like any other mesh.
 - **Shadows**: enable `renderer.shadowMap.enabled` and a light with `castShadow`. Buildings cast and receive; the [shadow layer](#shadowlayer) shows shadows on the unlit flat layers; your objects cast on the map and on the buildings.
 - **Batching**: with three r170+ the geometry of all tiles sharing a material is drawn by one `THREE.BatchedMesh` (one draw call, per-tile frustum culling). Custom `ShaderMaterial`s are drawn per tile.
@@ -619,7 +632,10 @@ With `transparent: true` and `opacity < 1` on the building material, `depthPrepa
 
 ```js
 const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
-// render targets: new THREE.WebGLRenderTarget(w, h, { stencilBuffer: true })
+
+// Post-processing: give the EffectComposer render targets with a stencil buffer too
+const target   = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, stencilBuffer: true });
+const composer = new EffectComposer(renderer, target);
 ```
 
 Without it the library warns once and coinciding faces may be blended twice. Set `depthPrepass = false` for plain Three.js blending of every face. If you use stencil bit `0x80` yourself, avoid it for other effects drawn between the buildings' passes.
@@ -633,7 +649,7 @@ Without it the library warns once and coinciding faces may be blended twice. Set
 | Invalid config value or unknown option name | `Error` thrown by the setter / `set()` / constructor. |
 | `start()` without `tileUrl` | `Error`. |
 | Wrong URL, refused token, no tile found | `sourceerror` event (and a console message). |
-| Transparent buildings without a stencil buffer | One console warning. |
+| Transparent buildings without a stencil buffer (renderer or render target, e.g. an `EffectComposer`) | One console warning. |
 | `featureStyle` returns `color` for a material without `vertexColors` | One console warning. |
 | Building material with `opacity < 1` but `transparent: false` | One console warning. |
-| Zoom level outside the source's range | One console warning. |
+| `zoomLevel` outside the source's range | The nearest served level is used, at the same scale; one console warning. |

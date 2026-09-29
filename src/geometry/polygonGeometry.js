@@ -70,7 +70,7 @@ function reverseRing(ring) {
  * @param {number} max
  * @returns {number[]|null} The clipped ring, the input itself if fully inside, or `null` if nothing is left.
  */
-export function clipRing(ring, min, max) {
+function clipRing(ring, min, max) {
     let inside = true;
     for (let i = 0; i < ring.length; i++) {
         const v = ring[i];

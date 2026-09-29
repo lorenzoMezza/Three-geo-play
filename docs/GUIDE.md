@@ -87,7 +87,11 @@ With a lit material (`MeshLambertMaterial`, `MeshStandardMaterial`, …) your li
 **Transparent buildings.** With `transparent: true` and `opacity < 1`, each pixel is blended once, with the surface nearest to the camera (`buildings.depthPrepass`, on by default): walls behind and between buildings stay hidden and objects behind them show through a single layer of "glass". The buildings' depth is drawn first with the building material itself (colour writes off), so both passes compute exactly the same depth, and a stencil bit (`0x80`) lets only one fragment per pixel be blended — so faces that coincide in the tile data (outlines drawn together with their `building:part`s, duplicated footprints, parts sharing walls) cannot be blended twice and flicker while the camera moves. Create the renderer with a stencil buffer for this:
 
 ```js
-const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true }); // render targets: stencilBuffer: true
+const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
+
+// With post-processing, the composer's render targets need a stencil buffer too:
+const target   = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, stencilBuffer: true });
+const composer = new EffectComposer(renderer, target);
 ```
 
 Without it ThreeGeoPlay warns once and coinciding faces are blended twice. Set `depthPrepass = false` for plain Three.js blending of every face.
@@ -97,7 +101,7 @@ Without it ThreeGeoPlay warns once and coinciding faces are blended twice. Set `
 The map behaves like a solid floor with solid buildings, so objects you add to the scene need no special settings:
 
 - **Buildings** are ordinary depth-tested meshes: they hide your objects and are hidden by them.
-- **The ground hides what is below it** — an invisible plane writes the ground depth before anything else is drawn (`MapConfig.occludeBelowGround`, default `true`; set it to `false` to see through the ground, e.g. with your own terrain).
+- **The ground hides what is below it** — an invisible plane writes the ground depth before anything else is drawn (`MapConfig.occludeBelowGround`, default `true`; set it to `false` to see through the ground, e.g. with your own terrain). If the map lies on a surface of yours (a diorama on a table, your own terrain just below it), draw that surface before the map — `table.renderOrder = -2000` — and the map layers are painted over it.
 - **Flat layers never cover your objects**, even when their materials are transparent.
 - **Nothing you pass in is modified**, so materials can be shared with your own meshes.
 
@@ -138,6 +142,7 @@ if (hit?.layer === 'transportation') console.log(hit.type);          // 'primary
 ```js
 geo.addEventListener('tileload', ({ tile }) => {
   for (const poi of tile.getFeatures('poi')) {
+    if (poi.properties.rank > 3) continue;   // a zoom-14 tile of a big city has thousands of POIs
     const [x, z] = poi.geometry[0];
     const marker = new THREE.Mesh(markerGeometry, markerMaterial);   // a 1 m marker
     marker.position.set(x, 0, z);
@@ -181,6 +186,45 @@ style.buildingLayer.material = new THREE.MeshLambertMaterial({ color: 0xf1ebe0, 
 
 The flat map layers use unlit materials, which cannot show shadows: `style.shadowLayer` lays a transparent `THREE.ShadowMaterial` plane over them that only darkens where a shadow falls (drawn while `renderer.shadowMap.enabled` is true; `style.shadowLayer.material.opacity` sets the strength). If you give the flat layers lit materials instead, use `layer.setReceiveShadowAll(true)` and hide the shadow layer. Your own meshes cast shadows on the map and the buildings like on any other surface.
 
+### Every material at once
+
+`layer.types` lists the types of a layer by class name, and `style.forEachType()` visits every type of every layer, the single-type ones (background, building, shadow) included:
+
+```js
+// Clip the whole map, e.g. to a round diorama
+renderer.localClippingEnabled = true;
+style.forEachType(type => {
+  for (const material of [type.material, type.outlineMaterial]) if (material) material.clippingPlanes = planes;
+});
+```
+
+### React Three Fiber
+
+Create the map in an effect, so that React's `StrictMode` (which mounts, unmounts and mounts again in development) gets a fresh instance each time — `destroy()` is final:
+
+```jsx
+import { useEffect, useRef } from 'react';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import { ThreeGeoPlay } from 'lm-three-geo-play';
+
+function GeoMap({ options }) {
+  const { scene, camera, gl } = useThree();
+  const geo = useRef(null);
+  useEffect(() => {
+    const map = new ThreeGeoPlay(scene, camera, gl, options);
+    map.start();
+    geo.current = map;
+    return () => map.destroy();
+  }, [scene, camera, gl]);
+  useFrame(() => geo.current?.onFrameUpdate());
+  return null;
+}
+
+<Canvas gl={{ stencil: true }} shadows camera={{ far: 20000 }}>
+  <GeoMap options={{ tileUrl: 'https://tiles.openfreemap.org/planet', originLatLon: { lat: 45.46, lon: 9.19 }, zoomLevel: 14, unitsPerMeter: 1 }} />
+</Canvas>
+```
+
 ---
 
 ## Follow Mode
@@ -221,7 +265,7 @@ Set them in the constructor options, with `config.set({ … })`, or one by one o
 | `accessToken` | Mapbox access token | `''` |
 | `tileSchema` | `TileSchema.AUTO`, `OPENMAPTILES`, `MAPBOX` or a custom function | `AUTO` |
 | `originLatLon` | `{ lat, lon }` placed at the world origin | Rome |
-| `zoomLevel` | Integer zoom level — must be served by your provider (OpenMapTiles providers usually stop at 14, Mapbox at 16) | `18` |
+| `zoomLevel` | Integer zoom level. OpenMapTiles providers usually stop at 14, Mapbox at 16: a level the source does not serve is replaced by the nearest one it serves, at the same scale | `18` |
 | `unitsPerMeter` | World units per metre (e.g. `1` for a scene in metres); when set, `tileWorldSize` follows from it | `null` |
 | `tileWorldSize` | World units per tile (changing it rescales loaded tiles; setting it clears `unitsPerMeter`) | `1` |
 | `renderDistance` | Tiles loaded around the center | `4` |
@@ -245,6 +289,7 @@ Invalid values and unknown option names throw an `Error`. `originLatLon` and `wo
 - Buildings are opaque and shaded by default; give the building material `transparent: true` and `opacity` for glass (create the renderer with `stencil: true`).
 - `moveMapOriginToLatLon()` no longer switches to `ViewMode.MANUAL`: in follow mode the map keeps following its target.
 - Materials are used as given: ThreeGeoPlay no longer changes their `depthTest`, `depthWrite` or `transparent`.
+- `buildingLayer.allowDetails` / `setAllowDetails()` never had an effect and are deprecated.
 
 ---
 

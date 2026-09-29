@@ -20,18 +20,6 @@ export function geoToTileXYFloat(dLon, dLat, zoom) {
 }
 
 /**
- * Converts geographic coordinates to integer Web-Mercator tile coordinates.
- * @param {number} dLon
- * @param {number} dLat
- * @param {number} zoom
- * @returns {[number, number]}
- */
-export function geoToTileXY(dLon, dLat, zoom) {
-    const [x, y] = geoToTileXYFloat(dLon, dLat, zoom);
-    return [Math.floor(x), Math.floor(y)];
-}
-
-/**
  * Converts (fractional) tile coordinates back to geographic coordinates.
  * @param {number} tileX
  * @param {number} tileY
@@ -39,10 +27,10 @@ export function geoToTileXY(dLon, dLat, zoom) {
  * @returns {[number, number]} `[lon, lat]` in degrees.
  */
 export function tileXYToGeo(tileX, tileY, zoom) {
-    const n       = 2 ** zoom;
-    const lon_deg = (tileX / n) * 360 - 180;
-    const lat_rad = Math.atan(Math.sinh(Math.PI * (1 - 2 * tileY / n)));
-    return [lon_deg, lat_rad * 180 / Math.PI];
+    const n   = 2 ** zoom;
+    const lon = (tileX / n) * 360 - 180;
+    const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * tileY / n))) * 180 / Math.PI;
+    return [lon, lat];
 }
 
 /**

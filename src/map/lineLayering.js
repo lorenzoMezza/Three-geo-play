@@ -1,7 +1,7 @@
 /**
  * Draw order of line features (roads, waterways).
  *
- * Flat map geometry is drawn without depth testing and stacked by render order.
+ * Flat map geometry is drawn without writing depth and stacked by render order.
  * Inside the `renderingOrder` unit of a line type (e.g. `-1 … -0.1` for roads)
  * lines are layered like on a printed map:
  *
@@ -56,7 +56,7 @@ function widthRank(width) {
  */
 export class LineLayering {
 
-    /** @type {Map<import('../style/core/Linefeaturetype.js').LineFeatureType, number>} */
+    /** @type {Map<import('../style/core/LineFeatureType.js').LineFeatureType, number>} */
     #fillRank = new Map();
 
     /** Converts metres to `lineWidth` units, so both kinds of width rank together. */
@@ -97,7 +97,7 @@ export class LineLayering {
     }
 
     /**
-     * @param {import('../style/core/Linefeaturetype.js').LineFeatureType} style
+     * @param {import('../style/core/LineFeatureType.js').LineFeatureType} style
      * @param {number} level - From {@link lineLevel}.
      * @returns {number}
      */
@@ -106,7 +106,7 @@ export class LineLayering {
     }
 
     /**
-     * @param {import('../style/core/Linefeaturetype.js').LineFeatureType} style
+     * @param {import('../style/core/LineFeatureType.js').LineFeatureType} style
      * @param {number} level - From {@link lineLevel}.
      * @param {boolean} [isRamp=false] - Link road: ranked like a line half as wide.
      * @returns {number}

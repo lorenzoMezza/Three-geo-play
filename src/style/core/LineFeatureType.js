@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BaseFeatureType } from './Basefeaturetype.js';
+import { BaseFeatureType } from './BaseFeatureType.js';
 
 /**
  * Extends {@link BaseFeatureType} with line-specific properties:

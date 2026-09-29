@@ -1,11 +1,12 @@
-import { BuildingLayer } from './layers/Buildinglayer.js';
-import { WaterLayer } from './layers/Waterlayer.js';
-import { LandUseLayer } from './layers/Landuselayer.js';
-import { LandCoverLayer } from './layers/Landcoverlayer.js';
-import { TransportationLayer } from './layers/Transportationlayer.js';
-import { WaterwayLayer } from './layers/Waterwaylayer.js';
-import { BackgroundLayer } from './layers/Backgroundlayer.js';
-import { ShadowLayer } from './layers/Shadowlayer.js';
+import { BuildingLayer } from './layers/BuildingLayer.js';
+import { WaterLayer } from './layers/WaterLayer.js';
+import { LandUseLayer } from './layers/LandUseLayer.js';
+import { LandCoverLayer } from './layers/LandCoverLayer.js';
+import { TransportationLayer } from './layers/TransportationLayer.js';
+import { WaterwayLayer } from './layers/WaterwayLayer.js';
+import { BackgroundLayer } from './layers/BackgroundLayer.js';
+import { ShadowLayer } from './layers/ShadowLayer.js';
+import { BaseLayer } from './core/BaseLayer.js';
 import { nextStyleStamp } from './core/styleStamp.js';
 import { applyDarkPreset } from './presets.js';
 
@@ -77,17 +78,7 @@ export class MapStyle {
      * @protected
      */
     get _stamp() {
-        return Math.max(
-            this.#stamp,
-            this.#buildingLayer._stamp,
-            this.#waterLayer._stamp,
-            this.#waterwayLayer._stamp,
-            this.#landUseLayer._stamp,
-            this.#landCoverLayer._stamp,
-            this.#transportationLayer._stamp,
-            this.#backgroundLayer._stamp,
-            this.#shadowLayer._stamp,
-        );
+        return Math.max(this.#stamp, ...LAYER_NAMES.map(name => this.getStyleLayerByName(name)._stamp));
     }
 
     /**
@@ -137,6 +128,27 @@ export class MapStyle {
      */
     refresh() {
         this.#stamp = nextStyleStamp();
+    }
+
+    /**
+     * Calls `callback(type, layerName, typeName)` for every feature type of every
+     * layer. The single-type layers (background, building, shadow) are passed
+     * as their own type, with `typeName` equal to the layer name.
+     * @param {(type: import('./core/BaseFeatureType.js').BaseFeatureType, layerName: string, typeName: string) => void} callback
+     *
+     * @example
+     * // Clip the whole map
+     * style.forEachType(type => { if (type.material) type.material.clippingPlanes = planes; });
+     */
+    forEachType(callback) {
+        for (const layerName of LAYER_NAMES) {
+            const layer = this.getStyleLayerByName(layerName);
+            if (layer instanceof BaseLayer) {
+                for (const [typeName, type] of Object.entries(layer.types)) callback(type, layerName, typeName);
+            } else {
+                callback(layer, layerName, layerName);
+            }
+        }
     }
 
     /**

@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 
-import { geoToTileXYFloat, tileSizeInMeters } from '../geo_utils/projection.js';
+import { geoToTileXYFloat, tileSizeInMeters } from '../tiles/projection.js';
 import { TileLayout }                         from '../config/MapConfig.js';
-import fetchTileData                          from '../utils/fetchTileData.js';
-import { isTileTemplate, resolveTileSource, templateSource, redactToken } from '../utils/tileSource.js';
+import fetchTileData                          from '../tiles/fetchTileData.js';
+import { isTileTemplate, resolveTileSource, templateSource, redactToken } from '../tiles/tileSource.js';
 import { Tile }                               from './Tile.js';
 import { MeshBatches }                        from './MeshBatches.js';
 import { drawWithoutDepthWrite }              from './drawHooks.js';
@@ -79,14 +79,13 @@ export class TileManager {
     // Snapshot of the source / origin currently in use.
     #zoom = 0;
 
-    /** @type {import('../utils/tileSource.js').TileSource|null} Resolved tile source (null while loading). */
+    /** @type {import('../tiles/tileSource.js').TileSource|null} Resolved tile source (null while loading). */
     #source = null;
     #sourceKey = null;
     /** @type {AbortController|null} */
     #sourceRequest = null;
     #sourceRetry = null;
     #sourceAttempts = 0;
-    #zoomWarned = null;
     #originFX = 0;
     #originFY = 0;
     #unitsPerMeter = 1;
@@ -224,7 +223,7 @@ export class TileManager {
 
     /**
      * The resolved tile source, or `null` while it is loading.
-     * @returns {import('../utils/tileSource.js').TileSource|null}
+     * @returns {import('../tiles/tileSource.js').TileSource|null}
      */
     get source() {
         return this.#source ? { ...this.#source, tiles: [...this.#source.tiles], layers: [...this.#source.layers] } : null;
@@ -540,13 +539,21 @@ export class TileManager {
         });
     }
 
+    /**
+     * Keeps `zoomLevel` within the levels the source serves: outside them there
+     * are no tiles (e.g. zoom 16 on a source that stops at 14), so the nearest
+     * served level is used, at the same scale. Applied on the next frame.
+     */
     #checkZoomRange() {
         const source = this.#source;
-        if (!source || this.#zoomWarned === this.#zoom) return;
-        if (this.#zoom > source.maxZoom || this.#zoom < source.minZoom) {
-            this.#zoomWarned = this.#zoom;
-            console.warn(`ThreeGeoPlay: zoomLevel ${this.#zoom} is outside the zoom range of the tile source (${source.minZoom}–${source.maxZoom}): tiles will be missing. Use a zoomLevel in that range.`);
-        }
+        const cfg    = this.#config;
+        if (!source) return;
+        const zoom = THREE.MathUtils.clamp(cfg.zoomLevel, source.minZoom, source.maxZoom);
+        if (zoom === cfg.zoomLevel) return;
+        console.warn(`ThreeGeoPlay: the tile source serves zoom levels ${source.minZoom}–${source.maxZoom}: using zoomLevel ${zoom} instead of ${cfg.zoomLevel}.`);
+        // Tiles of another zoom cover another area: keep the scale (unitsPerMeter does it by itself).
+        if (cfg.unitsPerMeter === null) cfg.tileWorldSize *= 2 ** (cfg.zoomLevel - zoom);
+        cfg.zoomLevel = zoom;
     }
 
     #tileUrl(x, y) {

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { MapStyle }                   from './style/MapStyle.js';
 import { MapConfig, ViewMode }        from './config/MapConfig.js';
 import { TileManager }                from './map/TileManager.js';
-import { geoToTileXYFloat, tileXYToGeo, tileSizeInMeters } from './geo_utils/projection.js';
+import { geoToTileXYFloat, tileXYToGeo, tileSizeInMeters } from './tiles/projection.js';
 
 const now = typeof performance !== 'undefined' ? () => performance.now() : () => Date.now();
 

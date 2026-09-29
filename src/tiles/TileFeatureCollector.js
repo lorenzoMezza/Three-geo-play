@@ -1,10 +1,10 @@
 import { GeomType } from './vectorTile.js';
-import { LineFeatureType } from '../style/core/Linefeaturetype.js';
+import { LineFeatureType } from '../style/core/LineFeatureType.js';
 import { TileSchema, resolveSchema, schemaReadsLayer } from './tileSchemas.js';
 
 /**
  * @typedef {Object} CollectedFeature
- * @property {import('../style/core/Basefeaturetype.js').BaseFeatureType} style
+ * @property {import('../style/core/BaseFeatureType.js').BaseFeatureType} style
  * @property {string} layer       - Style layer name (`'building'`, `'transportation'`, …).
  * @property {string} type        - Name of the style type the feature was matched to.
  * @property {string} sourceLayer - Layer of the vector tile the feature comes from.
@@ -97,7 +97,7 @@ export class TileFeatureCollector {
     /**
      * Visible style of a schema match; the first type name the layer knows wins.
      * @param {import('./tileSchemas.js').SchemaMatch} match
-     * @returns {{ style: import('../style/core/Basefeaturetype.js').BaseFeatureType, type: string } | null}
+     * @returns {{ style: import('../style/core/BaseFeatureType.js').BaseFeatureType, type: string } | null}
      */
     #styleFor(match) {
         const styleLayer = this.#mapStyle.getStyleLayerByName(match.layer);

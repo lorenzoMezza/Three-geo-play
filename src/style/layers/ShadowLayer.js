@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BaseFeatureType } from '../core/Basefeaturetype.js';
+import { BaseFeatureType } from '../core/BaseFeatureType.js';
 
 /**
  * Shadows cast on the ground by the buildings and by your own objects.
@@ -41,11 +41,6 @@ export class ShadowLayer extends BaseFeatureType {
         this.receiveShadow = true;
     }
 
-    /**
-     * Returns this instance regardless of name.
-     * ShadowLayer has a single type (itself).
-     * @param {string} _name - Unused.
-     * @returns {ShadowLayer} This instance.
-     */
+    /** Returns this layer (it has a single type). */
     getTypeByName(_name) { return this; }
 }

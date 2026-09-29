@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BaseFeatureType } from '../core/Basefeaturetype.js';
+import { BaseFeatureType } from '../core/BaseFeatureType.js';
 
 /**
  * Controls the rendering of 3D building extrusions on the map.
@@ -50,9 +50,6 @@ export class BuildingLayer extends BaseFeatureType {
     /** @type {number} */
     #height = 1;
 
-    /** @type {boolean} */
-    #allowDetails = false;
-
     /** @type {number} */
     #wallShading = 0.6;
 
@@ -68,18 +65,9 @@ export class BuildingLayer extends BaseFeatureType {
     /** @type {boolean} */
     #depthPrepass = true;
 
-
-    /**
-     * @param {THREE.Material} [material] - Fill material. Defaults to an opaque,
-     *   unlit warm white using the baked shading.
-     * @param {number}         [Y=0]
-     */
-    constructor(
-        material = new THREE.MeshBasicMaterial({ color: 0xF2ECE1, vertexColors: true }),
-        Y = 0.0,
-    ) {
-        super(null, Y, -1);
-        this.material      = material;
+    /** Opaque, unlit warm white buildings using the baked shading, casting and receiving shadows. */
+    constructor() {
+        super(new THREE.MeshBasicMaterial({ color: 0xF2ECE1, vertexColors: true }), 0, -1);
         this.castShadow    = true;
         this.receiveShadow = true;
     }
@@ -109,7 +97,6 @@ export class BuildingLayer extends BaseFeatureType {
     _copyFrom(source, copyMaterial) {
         super._copyFrom(source, copyMaterial);
         this.#height           = source.height;
-        this.#allowDetails     = source.allowDetails;
         this.#wallShading      = source.wallShading;
         this.#ambientOcclusion = source.ambientOcclusion;
         this.#roofColor        = source.roofColor;
@@ -209,15 +196,9 @@ export class BuildingLayer extends BaseFeatureType {
         this._touch();
     }
 
-    /**
-     * Reserved for finer building detail (e.g. roof shapes). Currently has no effect.
-     * @type {boolean}
-     */
-    get allowDetails()      { return this.#allowDetails; }
-    set allowDetails(value) {
-        this.#allowDetails = !!value;
-        this._touch();
-    }
+    /** @deprecated Has no effect (kept so that code written for 1.x keeps working). */
+    get allowDetails() { return false; }
+    set allowDetails(_value) {}
 
     // ── single-type layer contract ────────────────────────────────────────────
 
@@ -252,12 +233,8 @@ export class BuildingLayer extends BaseFeatureType {
      */
     setHeight(h)              { this.height       = h;        return this; }
 
-    /**
-     * Enables or disables detail rendering and returns this instance for chaining.
-     * @param {boolean} val
-     * @returns {BuildingLayer}
-     */
-    setAllowDetails(val)      { this.allowDetails = val;      return this; }
+    /** @deprecated Has no effect. */
+    setAllowDetails(_value)   { return this; }
 }
 
 /** Whether `value` is a number in [0, 1]; warns otherwise. */
