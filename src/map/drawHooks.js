@@ -4,7 +4,6 @@ import * as THREE from 'three';
  * Per-object render hooks that change how a map mesh is drawn without touching
  * its material outside of that draw: materials belong to the user's style and
  * may be shared with other objects of the scene.
- * @private
  */
 
 /**

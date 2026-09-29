@@ -62,6 +62,9 @@ export class Tile {
     /** @type {Uint8Array|null} */
     #payload;
 
+    /** `zoom/x/y` of the tile, the start of its feature keys. */
+    #name;
+
     /** @type {THREE.Group} */
     #group = new THREE.Group();
 
@@ -93,9 +96,11 @@ export class Tile {
 
     /**
      * @param {Uint8Array} payload - Raw MVT bytes.
+     * @param {string} name - `zoom/x/y` of the tile.
      */
-    constructor(payload) {
+    constructor(payload, name) {
         this.#payload                 = payload;
+        this.#name                    = name;
         this.#group.name              = 'ThreeGeoPlayTile';
         this.#group.matrixAutoUpdate  = false;
         this.#group.userData.threeGeoPlay = true;
@@ -141,10 +146,10 @@ export class Tile {
         const accept = sourceLayer === undefined ? undefined : name => name === sourceLayer;
         const result = [];
         for (const layer of decodeVectorTile(this.#payload, accept)) {
-            for (const feature of layer.features) {
+            layer.features.forEach((feature, index) => {
                 const type = GEOMETRY_TYPES[feature.type];
-                if (type) result.push(this.#describe(feature, layer.name, layer.extent, type));
-            }
+                if (type) result.push(this.#describe(feature, layer.name, index, layer.extent, type));
+            });
         }
         return result;
     }
@@ -161,10 +166,19 @@ export class Tile {
         return feature.loadGeometry().map(part => Array.from(part, v => v * scale));
     }
 
-    #describe(feature, sourceLayer, extent, type) {
+    /**
+     * Unique name of a feature on the map, `zoom/x/y/sourceLayer/index`. Unlike the
+     * `id` of the tile data (0 for most OpenMapTiles features), it tells features apart.
+     */
+    featureKey(sourceLayer, index) {
+        return `${this.#name}/${sourceLayer}/${index}`;
+    }
+
+    #describe(feature, sourceLayer, index, extent, type) {
         return {
             sourceLayer,
             id:         feature.id,
+            key:        this.featureKey(sourceLayer, index),
             type,
             properties: feature.properties,
             geometry:   this.featureGeometry(feature, extent),
@@ -201,6 +215,11 @@ export class Tile {
         const size          = this.#frameSize;
         const toLocal       = size / ctx.tileWorldSize;            // world units → local units
         const unitsPerMeter = ctx.unitsPerMeter * toLocal;
+
+        /** The `featureStyle` overrides of a collected feature, or `null`. */
+        const overrides = item => (item.style.featureStyle
+            ? featureOverrides(item, this.featureKey(item.sourceLayer, item.index))
+            : null);
 
         const batches  = [];
         const batchIds = new Map();
@@ -245,20 +264,23 @@ export class Tile {
             if (!(width > 0)) continue;
 
             const level  = lineLevel(feature.properties);
-            const custom = style.featureStyle ? featureOverrides(item) : null;
+            const custom = overrides(item);
             if (custom?.visible === false) continue;
             const material        = asMaterial(custom?.material) ?? style.material;
             const outlineMaterial = asMaterial(custom?.outlineMaterial) ?? style.outlineMaterial;
 
             const key = `${item.layer}.${item.type}|${item.sourceLayer}|${level}|${isRamp}|${material.id}|${outlineMaterial?.id}`;
             addToCommand(key, item, () => {
-                const outlineExtra = style.outlineWidthMeters === null ? style.outlineWidth * relative : style.outlineWidthMeters * unitsPerMeter;
-                const tolerance    = LINE_SIMPLIFY_TOLERANCE * extent;
-                const scale        = size / extent;
+                const outlineExtra = style.outlineWidthMeters === null
+                    ? style.outlineWidth * relative
+                    : style.outlineWidthMeters * unitsPerMeter;
+                const hasOutline = outlineExtra > 0 && outlineMaterial;
+                const tolerance  = LINE_SIMPLIFY_TOLERANCE * extent;
+                const scale      = size / extent;
                 return {
                     type:          'line',
                     batch:         batchFor('line', material, layering.fillOrder(style, level, isRamp), style),
-                    outlineBatch:  outlineExtra > 0 && outlineMaterial ? batchFor('outline', outlineMaterial, layering.outlineOrder(style, level), style) : -1,
+                    outlineBatch:  hasOutline ? batchFor('outline', outlineMaterial, layering.outlineOrder(style, level), style) : -1,
                     scale,
                     tolerance,
                     width,
@@ -274,7 +296,7 @@ export class Tile {
         // ── flat polygons ────────────────────────────────────────────────────
         for (const item of polygons) {
             const { style, extent } = item;
-            const custom = style.featureStyle ? featureOverrides(item) : null;
+            const custom = overrides(item);
             if (custom?.visible === false) continue;
             const material = asMaterial(custom?.material) ?? style.material;
 
@@ -305,7 +327,7 @@ export class Tile {
             let material  = style.material;
 
             // Per-building overrides from the style (data-driven styling).
-            const custom = style.featureStyle ? featureOverrides(item) : null;
+            const custom = overrides(item);
             if (custom) {
                 if (custom.visible === false) continue;
                 if (Number.isFinite(custom.height))    height    = Math.max(0, custom.height);
@@ -366,7 +388,11 @@ export class Tile {
         // the defaults (unlit) do not pay for what they do not use.
         const job = {
             payload:  this.#payload,
-            batches:  batches.map(({ kind, material }) => ({ kind, normals: !material.isMeshBasicMaterial, colors: !!material.vertexColors })),
+            batches:  batches.map(({ kind, material }) => ({
+                kind,
+                normals: !material.isMeshBasicMaterial,
+                colors:  !!material.vertexColors,
+            })),
             shadings,
             commands,
         };
@@ -564,11 +590,12 @@ const failingFeatureStyles = new WeakSet();
  * feature keeps its default style and the error is reported once: a bug in the
  * callback never breaks the tiles.
  * @param {import('../tiles/TileFeatureCollector.js').CollectedFeature} item
+ * @param {string} key - {@link Tile#featureKey}.
  */
-function featureOverrides({ style, feature, sourceLayer, type }) {
+function featureOverrides({ style, feature, sourceLayer, type }, key) {
     const featureStyle = style.featureStyle;
     try {
-        return featureStyle({ id: feature.id, properties: feature.properties, sourceLayer, type });
+        return featureStyle({ id: feature.id, key, properties: feature.properties, sourceLayer, type });
     } catch (err) {
         if (!failingFeatureStyles.has(featureStyle)) {
             failingFeatureStyles.add(featureStyle);

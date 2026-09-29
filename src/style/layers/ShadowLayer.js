@@ -2,29 +2,10 @@ import * as THREE from 'three';
 import { BaseFeatureType } from '../core/BaseFeatureType.js';
 
 /**
- * Shadows cast on the ground by the buildings and by your own objects.
- *
- * The flat map layers use unlit materials by default, which cannot show
- * shadows: this layer is a transparent plane laid over them, drawn with a
- * `THREE.ShadowMaterial` that only darkens where a shadow falls — the map keeps
- * its exact colours everywhere else. It is depth tested, so it never covers
- * buildings or objects.
- *
- * It is drawn only while `renderer.shadowMap.enabled` is true; you also need a
- * light with `castShadow = true` (e.g. a `DirectionalLight` whose shadow camera
- * covers the view). If you give the flat layers lit materials with
- * `receiveShadow = true` instead, hide this layer to avoid darkening twice.
- *
- * It is a single-type layer — it acts as both the layer and its own type, so
- * `getTypeByName` returns `this`.
- *
- * @example
- * renderer.shadowMap.enabled = true;
- * sun.castShadow = true;
- * geoPlay.getMapStyle().shadowLayer.material.opacity = 0.4; // darker shadows
- *
- * @class
- * @extends BaseFeatureType
+ * Shadows on the ground: a transparent plane over the flat layers, drawn with a
+ * `THREE.ShadowMaterial` that only darkens where a shadow falls (the flat layers
+ * are unlit and cannot show shadows themselves). Drawn while
+ * `renderer.shadowMap.enabled` is true. A single-type layer: it is its own type.
  */
 export class ShadowLayer extends BaseFeatureType {
 

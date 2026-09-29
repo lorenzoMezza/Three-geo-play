@@ -14,22 +14,9 @@ import { applyDarkPreset } from './presets.js';
 const LAYER_NAMES = ['background', 'waterway', 'water', 'landcover', 'landuse', 'building', 'transportation', 'shadow'];
 
 /**
- * Top-level style container for a ThreeGeoPlay map.
- * Holds one instance of each renderable layer and exposes them as named
- * properties. Pass a `MapStyle` instance to {@link MapConfig#mapStyle} (or
- * {@link ThreeGeoPlay#setMapStyle}) to apply it.
- *
- * Changes made to any layer or type — including after the map has started —
- * are applied to the tiles already on screen during the next
+ * The style of a map: one instance of each layer, as named properties. Changes
+ * to any layer or type are applied to the tiles on screen at the next
  * {@link ThreeGeoPlay#onFrameUpdate}.
- *
- * @example
- * const style = geoPlay.getMapStyle();
- * style.buildingLayer.isVisible = true;
- * style.transportationLayer.motorway.material =
- *     new THREE.MeshBasicMaterial({ color: 0xff0000 });
- *
- * @class
  */
 export class MapStyle {
 
@@ -227,14 +214,7 @@ export class MapStyle {
     get shadowLayer()      { return this.#shadowLayer; }
     set shadowLayer(layer) { this.#shadowLayer = this.#checked(layer, ShadowLayer, 'shadowLayer'); }
 
-    /**
-     * @template T
-     * @param {T} layer
-     * @param {new (...args: any[]) => T} LayerClass
-     * @param {string} name
-     * @returns {T}
-     * @private
-     */
+    /** Validates a layer assigned to the style (and records the change). */
     #checked(layer, LayerClass, name) {
         if (!(layer instanceof LayerClass)) {
             throw new Error(`ThreeGeoPlay: MapStyle.${name} must be an instance of ${LayerClass.name}`);

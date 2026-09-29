@@ -50,10 +50,11 @@ export function buildTileGeometry({ payload, batches, shadings, commands }) {
             const parts = features[index].loadGeometry();
 
             if (command.type === 'line') {
+                const { jointSegments, y, roundEnds, arcError } = command;
                 for (const part of parts) {
                     const line = scaled(simplifyLine(part, command.tolerance), command.scale);
-                    appendThickLine(out, line, command.width, command.jointSegments, command.y, command.roundEnds, command.arcError);
-                    if (outline) appendThickLine(outline, line, command.outlineWidth, command.jointSegments, command.y, command.roundEnds, command.arcError);
+                    appendThickLine(out, line, command.width, jointSegments, y, roundEnds, arcError);
+                    if (outline) appendThickLine(outline, line, command.outlineWidth, jointSegments, y, roundEnds, arcError);
                 }
             } else if (command.type === 'polygon') {
                 for (const polygon of classifyRings(parts)) {

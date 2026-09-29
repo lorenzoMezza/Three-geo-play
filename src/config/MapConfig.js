@@ -4,7 +4,6 @@ import { tileSizeInMeters } from '../tiles/projection.js';
 
 /**
  * Fields whose change discards every loaded tile and downloads them again.
- * @private
  * @type {ReadonlySet<string>}
  */
 const REBUILD_REQUIRED_FIELDS = new Set(['zoomLevel', 'tileUrl', 'accessToken']);
@@ -54,121 +53,41 @@ export const ViewMode = Object.freeze({
  */
 
 /**
- * Configuration for a ThreeGeoPlay map instance.
- * All settable properties mark themselves dirty so that {@link ThreeGeoPlay#onFrameUpdate}
- * can apply the minimum necessary update (re-layout, restyle, or full reload).
- * Invalid values throw an `Error`.
- *
- * @example
- * const config = geoPlay.getMapConfig();
- * config.zoomLevel      = 16;
- * config.renderDistance = 6;
- * config.tileLayout     = TileLayout.GRID;
- *
- * @class
+ * Configuration of a map. Setters validate their value (an invalid one throws)
+ * and mark the field dirty, so that {@link ThreeGeoPlay#onFrameUpdate} applies
+ * the smallest update needed (re-layout, restyle or reload).
  */
 export class MapConfig {
 
-    /** @type {string} */
-    #tileUrl = '';
-
-    /** @type {string} */
-    #accessToken = '';
-
-    /** @type {string|Function} */
-    #tileSchema = TileSchema.AUTO;
-
-    /**
-     * Web-Mercator zoom level. Higher values load more detail.
-     * @type {number}
-     */
-    #zoomLevel = 18;
-
-    /**
-     * Number of tiles to load in each direction from the center tile.
-     * @type {number}
-     */
-    #renderDistance = 4;
-
-    /**
-     * World-space size of one tile in Three.js units.
-     * @type {number}
-     */
-    #tileWorldSize = 1;
-
-    /**
-     * World units per metre; when set, {@link tileWorldSize} follows from it.
-     * @type {number|null}
-     */
-    #unitsPerMeter = null;
-
-    /**
-     * @type {TileLayout}
-     */
-    #tileLayout = TileLayout.CIRCULAR;
-
-    /**
-     * Geographic coordinates of the map origin.
-     * @type {LatLon}
-     */
-    #originLatLon = Object.freeze({ lat: 41.899689, lon: 12.437790 });
-
-    /**
-     * World position (X/Z) of the geographic origin, in Three.js units.
-     * @type {WorldOffset}
-     */
-    #worldOriginOffset = Object.freeze({ x: 0, z: 0 });
-
-    /**
-     * @type {ViewMode}
-     */
-    #viewMode = ViewMode.FOLLOW_TARGET;
-
-    /**
-     * @type {MapStyle}
-     */
-    #mapStyle = new MapStyle();
-
-    /**
-     * Minimum interval in milliseconds between follow-target updates.
-     * `0` means update every frame.
-     * @type {number}
-     */
+    // Current values: the documented accessors are below.
+    #tileUrl                  = '';
+    #accessToken              = '';
+    #tileSchema               = TileSchema.AUTO;
+    #zoomLevel                = 18;
+    #renderDistance           = 4;
+    #tileWorldSize            = 1;
+    #unitsPerMeter            = null;
+    #tileLayout               = TileLayout.CIRCULAR;
+    #originLatLon             = Object.freeze({ lat: 41.899689, lon: 12.437790 });
+    #worldOriginOffset        = Object.freeze({ x: 0, z: 0 });
+    #viewMode                 = ViewMode.FOLLOW_TARGET;
+    #mapStyle                 = new MapStyle();
     #followUpdateIntervalInMs = 0;
+    #showTileBorders          = false;
+    #occludeBelowGround       = true;
 
-    /**
-     * When true, draws a visible border around each loaded tile (useful for debugging).
-     * @type {boolean}
-     */
-    #showTileBorders = false;
-
-    /** @type {boolean} */
-    #occludeBelowGround = true;
-
-    /** @type {Set<string>} */
+    /** Names of the fields changed since the last {@link flushDirtyState}. @type {Set<string>} */
     #dirtyFields = new Set();
 
-    // ─── Dirty-state helpers ──────────────────────────────────────────────────
+    // ─── Dirty-state helpers (used by ThreeGeoPlay) ───────────────────────────
 
-    /**
-     * True if any property has been modified since the last {@link flushDirtyState} call.
-     * @type {boolean}
-     * @readonly
-     */
+    /** Whether a field changed since the last {@link flushDirtyState}. */
     get _isDirty() { return this.#dirtyFields.size > 0; }
 
-    /**
-     * The set of field names that have been modified since the last flush.
-     * @type {Set<string>}
-     * @readonly
-     */
+    /** Names of the fields changed since the last flush. */
     get _dirtyFields() { return this.#dirtyFields; }
 
-    /**
-     * True if any dirty field requires reloading all tiles (new download + geometry generation).
-     * @type {boolean}
-     * @readonly
-     */
+    /** Whether a changed field needs every tile downloaded and built again. */
     get requiresRebuild() {
         for (const field of this.#dirtyFields) {
             if (REBUILD_REQUIRED_FIELDS.has(field)) return true;
@@ -176,20 +95,12 @@ export class MapConfig {
         return false;
     }
 
-    /**
-     * Scale factor relative to zoom level 18.
-     * Useful for sizing world-space objects consistently across zoom levels.
-     * @type {number}
-     * @readonly
-     */
+    /** Scale relative to zoom level 18: `2 ** (zoomLevel - 18)`. */
     get zoomScaleFactor() {
         return 1 / Math.pow(2, 18 - this.#zoomLevel);
     }
 
-    /**
-     * Clears the dirty-field set. Called automatically by {@link ThreeGeoPlay#onFrameUpdate}
-     * after processing changes.
-     */
+    /** Clears the changed fields; called by {@link ThreeGeoPlay#onFrameUpdate}. */
     flushDirtyState() {
         this.#dirtyFields.clear();
     }
@@ -198,9 +109,6 @@ export class MapConfig {
      * Sets several properties at once; unknown names throw.
      * @param {Partial<Record<string, unknown>>} values
      * @returns {MapConfig} This instance, for chaining.
-     *
-     * @example
-     * config.set({ tileUrl: 'https://tiles.openfreemap.org/planet', zoomLevel: 14, renderDistance: 5 });
      */
     set(values) {
         for (const [name, value] of Object.entries(values ?? {})) {

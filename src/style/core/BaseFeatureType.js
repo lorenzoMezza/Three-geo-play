@@ -2,15 +2,10 @@ import * as THREE from 'three';
 import { nextStyleStamp } from './styleStamp.js';
 
 /**
- * Base class for all single feature types (polygon and line).
- * Holds the common properties shared by WaterType, LandCoverType,
- * LandUseType, WaterwayType, RoadType, etc.
- *
- * Every setter records a change stamp, so modifications made after
- * {@link ThreeGeoPlay#start} are re-applied to the tiles already on screen
- * during the next {@link ThreeGeoPlay#onFrameUpdate}.
- *
- * @class
+ * Settings of one feature type (a land use class, a road class, …): material,
+ * visibility, height, render order, shadows and `featureStyle`. Every setter
+ * records a change stamp, so changes reach the tiles on screen at the next
+ * {@link ThreeGeoPlay#onFrameUpdate}.
  */
 export class BaseFeatureType {
 
@@ -187,16 +182,16 @@ export class BaseFeatureType {
      *  - `material` (and, for lines, `outlineMaterial`) draws it with another material;
      *  - buildings also accept `color`, `height` and `minHeight` (see {@link BuildingLayer}).
      *
-     * It receives `{ id, properties, sourceLayer, type }` (the vector tile
+     * It receives `{ id, key, properties, sourceLayer, type }` (the vector tile
      * feature). Assign it again — or call {@link MapStyle#refresh} — when what
      * it returns changes, to apply it to the tiles on screen. A function that
      * throws is reported once and the features keep their default style.
      *
-     * @type {((feature: { id: number, properties: Record<string, unknown>, sourceLayer: string, type: string }) => Object | null | undefined) | null}
+     * @type {((feature: { id: number, key: string, properties: Record<string, unknown>, sourceLayer: string, type: string }) => Object | null | undefined) | null}
      *
      * @example
      * // Highlight one road, hide footpaths without a name
-     * roads.primary.featureStyle = ({ id }) => (id === selectedId ? { material: highlight } : null);
+     * roads.primary.featureStyle = ({ key }) => (key === selectedKey ? { material: highlight } : null);
      * roads.path.featureStyle    = ({ properties }) => (properties.name ? null : { visible: false });
      */
     get featureStyle()      { return this.#featureStyle; }

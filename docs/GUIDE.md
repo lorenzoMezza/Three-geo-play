@@ -47,7 +47,7 @@ night.transportationLayer.primary.material.color.set(0x7fd4ff);
 geo.setMapStyle(night);
 ```
 
-**Per-feature styling.** Any type can take a `featureStyle` function, called with `{ id, properties, sourceLayer, type }` for each feature: return `{ visible: false }` to skip it, `{ material }` (and `{ outlineMaterial }` for lines) to draw it differently — buildings also accept `color`, `height` and `minHeight` (see below). Assign it again, or call `style.refresh()`, when the answer changes.
+**Per-feature styling.** Any type can take a `featureStyle` function, called with `{ id, key, properties, sourceLayer, type }` for each feature: return `{ visible: false }` to skip it, `{ material }` (and `{ outlineMaterial }` for lines) to draw it differently — buildings also accept `color`, `height` and `minHeight` (see below). Assign it again, or call `style.refresh()`, when the answer changes.
 
 ```js
 const highlight = new THREE.MeshBasicMaterial({ color: 0x00c2ff });
@@ -128,7 +128,7 @@ marker.scale.setScalar(5 * geo.getUnitsPerMeter());          // 5 m tall, at any
 player.position.y = Math.max(player.position.y, geo.getHeightAt(player.position.x, player.position.z));
 ```
 
-**Picking.** `pickFeature(raycaster)` returns what is seen along a ray — the building, road, park… — with its style layer and type, the vector tile properties, the intersection and its outline. Flat layers are stacked by `renderingOrder`, not by height, so use it rather than the nearest intersection (`getFeatureAt(intersection)` works on intersections of your own raycasts).
+**Picking.** `pickFeature(raycaster)` returns what is seen along a ray — the building, road, park… — with its style layer and type, the vector tile properties, a `key` unique to that feature (the tile data's `id` is 0 for most OpenMapTiles features), the intersection and its outline. Flat layers are stacked by `renderingOrder`, not by height, so use it rather than the nearest intersection (`getFeatureAt(intersection)` works on intersections of your own raycasts).
 
 ```js
 raycaster.setFromCamera(pointer, camera);
@@ -153,14 +153,14 @@ geo.addEventListener('tileload', ({ tile }) => {
 geo.addEventListener('tileunload', ({ tile }) => tile.object3D.clear());   // dispose your resources here
 ```
 
-**Data-driven buildings.** `buildingLayer.featureStyle` is called for every building with `{ id, properties, sourceLayer, type }` and may return `{ color, height, minHeight, visible, material }` (heights in metres; `color` needs a `vertexColors` material — ThreeGeoPlay warns once otherwise). Assign it again, or call `style.refresh()`, when the answer changes:
+**Data-driven buildings.** `buildingLayer.featureStyle` is called for every building with `{ id, key, properties, sourceLayer, type }` and may return `{ color, height, minHeight, visible, material }` (heights in metres; `color` needs a `vertexColors` material — ThreeGeoPlay warns once otherwise). Assign it again, or call `style.refresh()`, when the answer changes:
 
 ```js
 let selected = null;
-style.buildingLayer.featureStyle = ({ id, properties }) =>
-  id === selected ? { color: 0xff8844 } : { color: properties.render_height > 40 ? 0xc8d6ff : 0xffffff };
+style.buildingLayer.featureStyle = ({ key, properties }) =>
+  key === selected ? { color: 0xff8844 } : { color: properties.render_height > 40 ? 0xc8d6ff : 0xffffff };
 // on click:
-selected = geo.pickFeature(raycaster)?.id ?? null;
+selected = geo.pickFeature(raycaster)?.key ?? null;
 style.refresh();
 ```
 

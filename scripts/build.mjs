@@ -30,7 +30,8 @@ const worker = await build({
 const inlineWorker = {
     name: 'inline-geometry-worker',
     setup(b) {
-        b.onResolve({ filter: /[\\/]geometryWorker\.js$/ }, () => ({ path: fileURLToPath(new URL('inlineGeometryWorker.js', import.meta.url)) }))
+        const inlineStarter = fileURLToPath(new URL('inlineGeometryWorker.js', import.meta.url))
+        b.onResolve({ filter: /[\\/]geometryWorker\.js$/ }, () => ({ path: inlineStarter }))
         b.onResolve({ filter: /^inline:tileGeometryWorker$/ }, args => ({ path: args.path, namespace: 'inline' }))
         b.onLoad({ filter: /.*/, namespace: 'inline' }, () => ({ contents: worker.outputFiles[0].text, loader: 'text' }))
     },
