@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 
-import { decodeVectorTile, GeomType } from '../utils/vectorTile.js';
-import { TileFeatureCollector } from '../utils/TileFeatureCollector.js';
-import { FloatArrayBuilder }    from '../geom_utils/FloatArrayBuilder.js';
-import { appendThickLine }      from '../geom_utils/lineGeometry.js';
-import { simplifyLine }         from '../geom_utils/RDPalgoritm.js';
+import { decodeVectorTile, GeomType } from '../tiles/vectorTile.js';
+import { TileFeatureCollector } from '../tiles/TileFeatureCollector.js';
+import { FloatArrayBuilder }    from '../geometry/FloatArrayBuilder.js';
+import { appendThickLine }      from '../geometry/lineGeometry.js';
+import { simplifyLine }         from '../geometry/simplifyLine.js';
 import { LineLayering, lineLevel } from './lineLayering.js';
-import { classifyRings, clipPolygon, appendFlatPolygon } from '../geom_utils/polygonGeometry.js';
-import { BuildingGeometryBuilder, BuildingShading, roofVariation } from '../geom_utils/buildingGeometry.js';
+import { classifyRings, clipPolygon, appendFlatPolygon } from '../geometry/polygonGeometry.js';
+import { BuildingGeometryBuilder, BuildingShading, roofVariation } from '../geometry/buildingGeometry.js';
 
 
 const TMP_COLOR = new THREE.Color();
@@ -155,7 +155,7 @@ export class Tile {
     /**
      * Geometry of a feature in the tile's local frame: parts (points, lines or
      * polygon rings) as flat `[x0, z0, x1, z1, …]` arrays.
-     * @param {import('../utils/vectorTile.js').VectorTileFeature} feature
+     * @param {import('../tiles/vectorTile.js').VectorTileFeature} feature
      * @param {number} extent
      * @returns {number[][]}
      */
@@ -426,7 +426,7 @@ function createGeometry({ kind, material, out }) {
 /**
  * Shading baked into the buildings of one style (see {@link BuildingShading}).
  * The directional part is only baked for unlit materials: lit ones get it from the scene lights.
- * @param {import('../style/layers/Buildinglayer.js').BuildingLayer} style
+ * @param {import('../style/layers/BuildingLayer.js').BuildingLayer} style
  * @param {number} groundY - Local Y of the ground the buildings stand on.
  * @param {number} k       - Local units per (exaggerated) metre.
  */
@@ -492,7 +492,7 @@ const failingFeatureStyles = new WeakSet();
  * Calls the `featureStyle` function of a feature's type. If it throws, the
  * feature keeps its default style and the error is reported once: a bug in the
  * callback never breaks the tiles.
- * @param {import('../utils/TileFeatureCollector.js').CollectedFeature} item
+ * @param {import('../tiles/TileFeatureCollector.js').CollectedFeature} item
  */
 function featureOverrides({ style, feature, sourceLayer, type }) {
     const featureStyle = style.featureStyle;

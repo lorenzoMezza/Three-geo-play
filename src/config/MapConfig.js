@@ -1,6 +1,6 @@
 import { MapStyle } from '../style/MapStyle.js';
-import { TileSchema } from '../utils/tileSchemas.js';
-import { tileSizeInMeters } from '../geo_utils/projection.js';
+import { TileSchema } from '../tiles/tileSchemas.js';
+import { tileSizeInMeters } from '../tiles/projection.js';
 
 /**
  * Fields whose change discards every loaded tile and downloads them again.

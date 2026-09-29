@@ -93,6 +93,8 @@ marker.position.set(x, geo.getHeightAt(x, z), z);
 - 📖 **[Guide](https://github.com/lorenzoMezza/Three-geo-play/blob/main/docs/GUIDE.md)** — styling, buildings and glass, integrating with your scene, shadows, tile providers, migrating from 1.x
 - ▶️ **[Live demo](https://lorenzomezza.github.io/Three-geo-play-demo-website/)** and its [source](https://github.com/lorenzoMezza/Three-geo-play-demo-website)
 - 🧪 **Playground** — `cd playground && npm install && npm run dev` runs the library from `src` for quick tries and debugging
+- 🤝 **[Contributing](https://github.com/lorenzoMezza/Three-geo-play/blob/main/CONTRIBUTING.md)** — how the code is organised, tests and guidelines
+- 📝 **[Changelog](https://github.com/lorenzoMezza/Three-geo-play/blob/main/CHANGELOG.md)**
 
 ## License
 

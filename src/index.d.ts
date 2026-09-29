@@ -188,7 +188,7 @@ export declare class BaseFeatureType {
      * with your own objects). Map geometry faces up (+Y): `THREE.FrontSide` materials work.
      */
     material: THREE.Material | null;
-    /** Height (world units) at which this type is drawn. */
+    /** Height (world units) at which this type is drawn (default 0: flat layers are stacked by `renderingOrder`, not by height). */
     Y: number;
     /**
      * Three.js render order (negative recommended). Flat map layers lie on the same
@@ -225,13 +225,13 @@ export declare class BaseFeatureType {
 }
 
 /** A single land cover type (grass, wood, sand, …). */
-export declare class LandCoverType extends BaseFeatureType {}
+export type LandCoverType = BaseFeatureType;
 
 /** A single land use type (residential, industrial, hospital, …). */
-export declare class LandUseType extends BaseFeatureType {}
+export type LandUseType = BaseFeatureType;
 
 /** A single water body type (river, lake, ocean, …). */
-export declare class WaterType extends BaseFeatureType {}
+export type WaterType = BaseFeatureType;
 
 /** A line feature type (roads, waterways). */
 export declare class LineFeatureType extends BaseFeatureType {
@@ -271,12 +271,26 @@ export declare class BaseLayer<TName extends string, TType extends BaseFeatureTy
     isVisible: boolean;
     /** Alias of `isVisible`, named like `THREE.Object3D.visible`. */
     visible: boolean;
+    /** Every feature type of the layer, by class name. */
+    readonly types: Readonly<Record<TName, TType>>;
     getTypeByName(name: TName | (string & {})): TType | null;
     setAllMaterials(material: THREE.Material): void;
     /** Sets `isVisible` on every type of the layer. */
     setVisibleAll(isVisible: boolean): void;
     /** Sets `receiveShadow` on every type of the layer (useful with lit materials). */
     setReceiveShadowAll(receiveShadow: boolean): void;
+}
+
+/** Shared behaviour of the line layers (roads, waterways). */
+export declare class LineLayer<TName extends string> extends BaseLayer<TName, LineFeatureType> {
+    /** Pass `null` as `material` to change only the outlines. */
+    setAllMaterials(material: THREE.Material | null, outlineMaterial?: THREE.Material): void;
+    /** Sets `lineWidth` on every type. */
+    setLineWidthAll(width: number): void;
+    setOutlineWidthAll(width: number): void;
+    resetOutlineWidthAll(): void;
+    setJointSegmentsAll(segments: number): void;
+    setAllRenderOrder(order: number): void;
 }
 
 /** Background base-fill plane rendered beneath everything else. */
@@ -326,12 +340,13 @@ export declare class BuildingLayer extends BaseFeatureType {
      * buildings.featureStyle = ({ properties }) => ({ color: properties.render_height > 30 ? 0xb0c4ff : 0xffffff });
      */
     featureStyle: ((feature: StyledFeature) => BuildingFeatureStyle | null | undefined | void) | null;
-    /** Reserved for future roof/detail rendering. Currently has no effect. */
+    /** @deprecated Has no effect. */
     allowDetails: boolean;
     getTypeByName(name: string): this;
     setMaterial(material: THREE.Material): this;
     setY(y: number): this;
     setHeight(h: number): this;
+    /** @deprecated Has no effect. */
     setAllowDetails(val: boolean): this;
 }
 
@@ -464,7 +479,7 @@ export declare class WaterLayer extends BaseLayer<WaterClassName, WaterType> {
 export type WaterwayClassName = 'river' | 'stream' | 'tidal_channel' | 'flowline' | 'canal' | 'drain' | 'ditch' | 'pressurised';
 
 /** Waterway types (rivers, canals, ditches as lines). */
-export declare class WaterwayLayer extends BaseLayer<WaterwayClassName, WaterwayType> {
+export declare class WaterwayLayer extends LineLayer<WaterwayClassName> {
     readonly river: WaterwayType;
     readonly stream: WaterwayType;
     readonly tidal_channel: WaterwayType;
@@ -473,17 +488,11 @@ export declare class WaterwayLayer extends BaseLayer<WaterwayClassName, Waterway
     readonly drain: WaterwayType;
     readonly ditch: WaterwayType;
     readonly pressurised: WaterwayType;
-    /** Pass `null` as `material` to change only the outlines. */
-    setAllMaterials(material: THREE.Material | null, outlineMaterial?: THREE.Material): void;
-    setOutlineWidthAll(width: number): void;
-    resetOutlineWidthAll(): void;
-    setLineWidthAll(width: number): void;
-    setJointSegmentsAll(segments: number): void;
-    setAllRenderOrder(order: number): void;
+    static readonly admittedClasses: Set<WaterwayClassName>;
 }
 
 export type TransportClassName =
-    | 'motorway' | 'trunk' | 'trunk_construction'
+    | 'motorway' | 'motorway_construction' | 'trunk' | 'trunk_construction'
     | 'primary' | 'primary_construction'
     | 'secondary' | 'secondary_construction'
     | 'tertiary' | 'tertiary_construction'
@@ -496,8 +505,9 @@ export type TransportClassName =
     | 'rail' | 'transit' | 'pedestrian' | 'pier' | 'ferry';
 
 /** Road and transport types. OpenMapTiles `subclass` values (e.g. `pedestrian`) take precedence over `class`. */
-export declare class TransportationLayer extends BaseLayer<TransportClassName, RoadType> {
+export declare class TransportationLayer extends LineLayer<TransportClassName> {
     readonly motorway: RoadType;
+    readonly motorway_construction: RoadType;
     readonly trunk: RoadType;
     readonly trunk_construction: RoadType;
     readonly primary: RoadType;
@@ -523,20 +533,24 @@ export declare class TransportationLayer extends BaseLayer<TransportClassName, R
     readonly pedestrian: RoadType;
     readonly pier: RoadType;
     readonly ferry: RoadType;
-    /** Pass `null` as `material` to change only the outlines. */
-    setAllMaterials(material: THREE.Material | null, outlineMaterial?: THREE.Material): void;
-    setOutlineWidthAll(width: number): void;
-    resetOutlineWidthAll(): void;
-    /** Sets `lineWidth` on every transportation type. */
-    setLineWidthAll(width: number): void;
-    setJointSegmentsAll(segments: number): void;
-    setAllRenderOrder(order: number): void;
     /** Alias for the `isVisible` setter. */
     setVisible(isVisible: boolean): void;
-    static readonly admittedClasses: Set<TransportClassName | 'motorway_construction'>;
+    static readonly admittedClasses: Set<TransportClassName>;
 }
 
 // ─── MapStyle ─────────────────────────────────────────────────────────────────
+
+/** The layers of a {@link MapStyle}, by name. */
+export interface StyleLayers {
+    background: BackgroundLayer;
+    waterway: WaterwayLayer;
+    water: WaterLayer;
+    landcover: LandCoverLayer;
+    landuse: LandUseLayer;
+    building: BuildingLayer;
+    transportation: TransportationLayer;
+    shadow: ShadowLayer;
+}
 
 /**
  * Top-level style container for a ThreeGeoPlay map.
@@ -559,15 +573,15 @@ export declare class MapStyle {
     backgroundLayer: BackgroundLayer;
     /** Ground shadows, drawn while `renderer.shadowMap.enabled` is true. */
     shadowLayer: ShadowLayer;
-    getStyleLayerByName(layerName: 'background'): BackgroundLayer;
-    getStyleLayerByName(layerName: 'waterway'): WaterwayLayer;
-    getStyleLayerByName(layerName: 'water'): WaterLayer;
-    getStyleLayerByName(layerName: 'landcover'): LandCoverLayer;
-    getStyleLayerByName(layerName: 'landuse'): LandUseLayer;
-    getStyleLayerByName(layerName: 'building'): BuildingLayer;
-    getStyleLayerByName(layerName: 'transportation'): TransportationLayer;
-    getStyleLayerByName(layerName: 'shadow'): ShadowLayer;
-    getStyleLayerByName(layerName: string): BackgroundLayer | WaterwayLayer | WaterLayer | LandCoverLayer | LandUseLayer | BuildingLayer | TransportationLayer | ShadowLayer | null;
+    /** The layer with this name (see {@link StyleLayers}), or `null` for an unknown name. */
+    getStyleLayerByName<N extends StyleLayerName>(layerName: N): StyleLayers[N];
+    getStyleLayerByName(layerName: string): StyleLayers[StyleLayerName] | null;
+    /**
+     * Calls `callback` for every feature type of every layer. The single-type layers
+     * (background, building, shadow) are passed as their own type, with `typeName` equal to the layer name.
+     * @example style.forEachType(type => { if (type.material) type.material.clippingPlanes = planes; });
+     */
+    forEachType(callback: (type: BaseFeatureType, layerName: StyleLayerName, typeName: string) => void): void;
     /**
      * Applies the style again to the tiles on screen (next `onFrameUpdate()`). Property changes are
      * detected by themselves; call it when something they cannot see changes, e.g. the result of a
@@ -613,7 +627,10 @@ export declare class MapConfig {
     accessToken: string;
     /** How tile layers map onto `MapStyle`: a `TileSchema` (default `'auto'`) or a custom function. */
     tileSchema: TileSchema | TileSchemaFunction;
-    /** Web-Mercator zoom level, integer 0–24 (default 18). Changing it reloads all tiles. */
+    /**
+     * Web-Mercator zoom level, integer 0–24 (default 18). Changing it reloads all tiles.
+     * A level the tile source does not serve is replaced by the nearest one it serves, at the same scale (with a warning).
+     */
     zoomLevel: number;
     /** Tiles loaded in each direction from the center tile (default 4). */
     renderDistance: number;

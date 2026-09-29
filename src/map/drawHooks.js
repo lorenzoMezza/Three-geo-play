@@ -134,7 +134,7 @@ function warnWithoutStencil(renderer) {
     const stencil = target ? target.stencilBuffer : renderer.getContext().getContextAttributes()?.stencil;
     if (stencil) return;
     warnedNoStencil = true;
-    console.warn('ThreeGeoPlay: transparent buildings are drawn without a stencil buffer, so faces that coincide in the tile data (overlapping building parts) are blended twice and can flicker. Create the renderer with new THREE.WebGLRenderer({ stencil: true }) (and render targets with stencilBuffer: true).');
+    console.warn('ThreeGeoPlay: transparent buildings are drawn without a stencil buffer, so faces that coincide in the tile data (overlapping building parts) are blended twice and can flicker. Create the renderer with new THREE.WebGLRenderer({ stencil: true }) (and render targets, such as those of an EffectComposer, with stencilBuffer: true).');
 }
 
 /**
