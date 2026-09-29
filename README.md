@@ -55,7 +55,7 @@ The map loads around the camera as it moves. Show the provider's credits from `g
 - **Fully styleable** — any material per layer, live changes, a ready-made night theme, per-feature styling from OSM data
 - **Made for games** — follow any object, `getHeightAt()` for collisions, `pickFeature()` for clicks, attach objects to tiles
 - **Any vector tile provider** — OpenFreeMap, MapTiler, Mapbox, MapLibre styles or your own server
-- **Fast** — one draw call per material, tiles built without blocking the frame
+- **Fast** — one draw call per material, tiles built in web workers without blocking the frame
 
 | | |
 |---|---|

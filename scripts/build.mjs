@@ -5,14 +5,40 @@
 // Three.js is always external: the application's copy is used, never a bundled one.
 import { build } from 'esbuild'
 import { copyFile, mkdir, readFile, rm } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
 
 await rm('dist', { recursive: true, force: true })
 await mkdir('dist', { recursive: true })
 
+// Tile geometry is built in web workers. The worker is bundled on its own and
+// inlined as a string (see inlineGeometryWorker.js), so no separate file ships.
+const worker = await build({
+    entryPoints: ['src/map/tileGeometryWorker.js'],
+    bundle: true,
+    format: 'iife',
+    target: 'es2022',
+    minify: true,
+    legalComments: 'none',
+    write: false,
+    logLevel: 'warning',
+})
+
+// Swaps src/map/geometryWorker.js for inlineGeometryWorker.js, which imports the
+// worker bundled above as a string ('inline:tileGeometryWorker').
+const inlineWorker = {
+    name: 'inline-geometry-worker',
+    setup(b) {
+        b.onResolve({ filter: /[\\/]geometryWorker\.js$/ }, () => ({ path: fileURLToPath(new URL('inlineGeometryWorker.js', import.meta.url)) }))
+        b.onResolve({ filter: /^inline:tileGeometryWorker$/ }, args => ({ path: args.path, namespace: 'inline' }))
+        b.onLoad({ filter: /.*/, namespace: 'inline' }, () => ({ contents: worker.outputFiles[0].text, loader: 'text' }))
+    },
+}
+
 const common = {
     entryPoints: ['src/index.js'],
+    plugins: [inlineWorker],
     bundle: true,
     external: ['three', 'three/*'],
     target: 'es2022',

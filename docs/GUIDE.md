@@ -94,7 +94,7 @@ const target   = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: TH
 const composer = new EffectComposer(renderer, target);
 ```
 
-Without it ThreeGeoPlay warns once and coinciding faces are blended twice. Set `depthPrepass = false` for plain Three.js blending of every face.
+Without it ThreeGeoPlay warns once and coinciding faces are blended twice. Set `depthPrepass = false` for plain Three.js blending of every face. Glass lets the light through: while the material is transparent, buildings cast no shadows (they still receive them).
 
 ### Your objects and the map
 
@@ -351,4 +351,6 @@ config.tileSchema = (sourceLayer, props) => {
 
 - Geometry of all tiles sharing a material is drawn by one `THREE.BatchedMesh` (one draw call, per-tile frustum culling). This needs three.js r170+; older versions fall back to one mesh per tile. Custom `ShaderMaterial`s are always drawn per tile.
 - Lines use round caps and joins tessellated to the tile's precision: narrow roads cost a few triangles.
-- Tiles are decoded and built in time slices of a few milliseconds, so loading never freezes the frame loop; only visible layers are decoded.
+- Tile geometry is built in two web workers. The main thread only reads the feature attributes and applies the style (`featureStyle` included), in time slices of a few milliseconds, so loading never freezes the frame loop; only visible layers are decoded.
+- The workers start by themselves from code in the package, with any bundler or CDN. Where they cannot (Node, React Native, a Content-Security-Policy without `worker-src blob:`), tiles are built on the main thread, in the same time slices, with the same result.
+- A higher `zoomLevel` means smaller tiles: the same area takes four times as many tiles per level, so lower `renderDistance` as you raise the zoom. Most providers stop at zoom 14 (OpenMapTiles) or 16 (Mapbox); above that their highest level is used at the same scale, which costs the same as that level.

@@ -6,6 +6,7 @@ import fetchTileData                          from '../tiles/fetchTileData.js';
 import { isTileTemplate, resolveTileSource, templateSource, redactToken } from '../tiles/tileSource.js';
 import { Tile }                               from './Tile.js';
 import { MeshBatches }                        from './MeshBatches.js';
+import { GeometryBuilder }                    from './GeometryBuilder.js';
 import { drawWithoutDepthWrite }              from './drawHooks.js';
 
 /** Missing tiles in a row, with none found, after which the tile URL is reported as wrong. */
@@ -56,7 +57,9 @@ const State = Object.freeze({
  * @property {AbortController|null} controller
  * @property {ReturnType<typeof setTimeout>|null} retryTimer
  * @property {Tile|null} tile
- * @property {boolean} buildPending
+ * @property {boolean} buildPending - Waiting in the build queue.
+ * @property {boolean} building     - A build is running (its geometry may be in a worker).
+ * @property {number}  buildId      - Id of the latest build started: older results are dropped.
  */
 
 /**
@@ -116,9 +119,13 @@ export class TileManager {
     /** @type {THREE.Mesh|null} Invisible plane writing the depth of the ground ({@link MapConfig#occludeBelowGround}). */
     #groundDepthMesh = null;
 
-    /** Material of {@link #groundDepthMesh}: depth only, pushed slightly back so the map layers lying on it always pass. */
+    /**
+     * Material of {@link #groundDepthMesh}: depth only, pushed slightly back so the map layers
+     * lying on it always pass. Seen from above the slope term is zero, and one depth step is not
+     * enough for the rounding of this large plane: the flat layers flickered, 4 steps never do.
+     */
     #groundDepthMaterial = new THREE.MeshBasicMaterial({
-        colorWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+        colorWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 4,
     });
 
     /** @type {THREE.Mesh|null} Ground shadows ({@link MapStyle#shadowLayer}). */
@@ -135,6 +142,12 @@ export class TileManager {
 
     /** @type {MeshBatches} */
     #batches;
+
+    /** Builds tile geometry, in web workers when possible. @type {GeometryBuilder} */
+    #geometry;
+
+    /** Tile builds running. */
+    #building = 0;
 
     #pending = { reset: true, origin: true, placement: true, needed: true, borders: false, restyle: false, ground: false };
     #warnedStatuses = new Set();
@@ -157,7 +170,8 @@ export class TileManager {
         this.#root    = root;
         this.#notify  = notify;
         this.#layersMask = root.layers.mask;
-        this.#batches = new MeshBatches(root);
+        this.#batches  = new MeshBatches(root);
+        this.#geometry = new GeometryBuilder();
         this.#buildingVertexColors = !!mapConfig.mapStyle.buildingLayer.material?.vertexColors;
         this.#groundDepthMaterial.name = 'ThreeGeoPlayGroundDepth';
     }
@@ -186,7 +200,7 @@ export class TileManager {
         for (const record of this.#tiles.values()) {
             if (record.state === State.READY) {
                 stats.ready++;
-                if (record.buildPending) stats.rebuilding++;
+                if (record.buildPending || record.building) stats.rebuilding++;
             }
             else if (record.state === State.EMPTY)  stats.empty++;
             else if (record.state === State.FAILED) stats.failed++;
@@ -219,6 +233,7 @@ export class TileManager {
     setShadowsEnabled(enabled) {
         this.#shadowsEnabled = !!enabled;
         if (this.#shadowMesh) this.#shadowMesh.visible = this.#shadowsEnabled;
+        if (this.#shadowsEnabled) this.#batches.updateShadowCasting();
     }
 
     /**
@@ -356,7 +371,7 @@ export class TileManager {
 
         if (p.restyle) {
             for (const record of this.#tiles.values()) {
-                if (record.state === State.READY) this.#enqueueBuild(record);
+                if (record.state === State.READY || record.building) this.#enqueueBuild(record);
             }
         }
 
@@ -371,6 +386,11 @@ export class TileManager {
         }
 
         p.reset = p.origin = p.placement = p.needed = p.borders = p.restyle = p.ground = false;
+
+        // Idle (nothing downloading or being built): give back the memory of mostly empty batches.
+        if (this.#activeFetches === 0 && this.#fetchQueue.length === 0 && this.#buildQueue.length === 0 && this.#building === 0) {
+            this.#batches.trim();
+        }
     }
 
     /**
@@ -393,6 +413,7 @@ export class TileManager {
         for (const mesh of [this.#groundMesh, this.#groundDepthMesh, this.#shadowMesh]) mesh?.removeFromParent();
         this.#groundMesh = this.#groundDepthMesh = this.#shadowMesh = null;
         this.#planeGeometry.dispose();
+        this.#geometry.dispose();
         this.#groundDepthMaterial.dispose();
         this.#batches.dispose();
     }
@@ -440,6 +461,8 @@ export class TileManager {
                 retryTimer:   null,
                 tile:         null,
                 buildPending: false,
+                building:     false,
+                buildId:      0,
             };
             this.#tiles.set(key, record);
         }
@@ -668,15 +691,36 @@ export class TileManager {
         record.buildPending = true;
         this.#buildQueue.push(record);
         this.#buildQueue.sort(this.#fartherFirst);
-        if (this.#buildTimer === null) this.#buildTimer = setTimeout(this.#runBuildSlice, 0);
+        this.#scheduleBuilds();
     }
 
+    #scheduleBuilds() {
+        if (this.#buildTimer === null && this.#buildQueue.length > 0) this.#buildTimer = setTimeout(this.#runBuildSlice, 0);
+    }
+
+    /** Starts the builds of the nearest queued tiles, for a few milliseconds of main-thread time. */
     #runBuildSlice = () => {
         this.#buildTimer = null;
         if (this.#destroyed) return;
 
+        // Enough builds to keep every worker busy, not more, so that the nearest tiles are still
+        // picked first when the camera moves. Without workers the geometry is built right here.
+        const workers     = this.#geometry.workerCount;
+        const maxBuilding = workers > 0 ? 2 * workers : Infinity;
+        const ctx   = this.#buildContext();
+        const start = now();
+        while (this.#buildQueue.length > 0 && this.#building < maxBuilding && now() - start < BUILD_BUDGET_MS) {
+            const record = this.#buildQueue.pop();
+            if (!record.buildPending || !this.#isCurrent(record) || !record.tile) continue;
+            record.buildPending = false;
+            this.#build(record, ctx);
+        }
+        if (this.#building < maxBuilding) this.#scheduleBuilds();
+    };
+
+    #buildContext() {
         const cfg = this.#config;
-        const ctx = {
+        return {
             mapStyle:      cfg.mapStyle,
             tileWorldSize: cfg.tileWorldSize,
             zoomScale:     2 ** (this.#zoom - 18),
@@ -686,34 +730,45 @@ export class TileManager {
             tileSchema:    cfg.tileSchema,
             sourceLayers:  this.#source?.layers ?? [],
         };
+    }
 
-        const start = now();
-        while (this.#buildQueue.length > 0 && now() - start < BUILD_BUDGET_MS) {
-            const record = this.#buildQueue.pop();
-            if (!record.buildPending || !this.#isCurrent(record) || !record.tile) continue;
-            record.buildPending = false;
-
-            let appeared = false;
-            try {
-                record.tile.build(ctx);
-                this.#place(record);
-                if (record.state !== State.READY) {
-                    this.#root.add(record.tile.object3D);
-                    record.state = State.READY;
-                    record.tile.info = this.#describeTile(record);
-                    appeared = true;
-                }
-            } catch (err) {
-                console.error(`ThreeGeoPlay: tile ${this.#zoom}/${record.tx}/${record.ty} could not be built`, err);
-                record.tile.dispose();
-                record.tile  = null;
-                record.state = State.FAILED;
+    /**
+     * Builds a tile: the plan here (it runs the style callbacks), the geometry in
+     * a worker when there is one, then the meshes here.
+     */
+    async #build(record, ctx) {
+        const tile    = record.tile;
+        const buildId = ++record.buildId;
+        // The result is dropped if the tile left meanwhile, or a newer build of it started.
+        const outdated = () => !this.#isCurrent(record) || record.tile !== tile || record.buildId !== buildId;
+        record.building = true;
+        this.#building++;
+        let appeared = false;
+        try {
+            const plan     = tile.plan(ctx);
+            const geometry = await this.#geometry.build(plan.job);
+            if (outdated()) return;
+            tile.apply(ctx, plan, geometry);
+            this.#place(record);
+            if (record.state !== State.READY) {
+                this.#root.add(tile.object3D);
+                record.state = State.READY;
+                tile.info    = this.#describeTile(record);
+                appeared     = true;
             }
-            if (appeared) this.#emit('tileload', { tile: record.tile.info });
+        } catch (err) {
+            if (outdated()) return;
+            console.error(`ThreeGeoPlay: tile ${this.#zoom}/${record.tx}/${record.ty} could not be built`, err);
+            tile.dispose();
+            record.tile  = null;
+            record.state = State.FAILED;
+        } finally {
+            if (record.buildId === buildId) record.building = false;
+            this.#building--;
+            if (!this.#destroyed) this.#scheduleBuilds();
         }
-
-        if (this.#buildQueue.length > 0) this.#buildTimer = setTimeout(this.#runBuildSlice, 0);
-    };
+        if (appeared) this.#emit('tileload', { tile: tile.info });
+    }
 
     /**
      * Dispatches an event. A listener that throws is reported but never breaks

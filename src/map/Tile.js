@@ -2,12 +2,9 @@ import * as THREE from 'three';
 
 import { decodeVectorTile, GeomType } from '../tiles/vectorTile.js';
 import { TileFeatureCollector } from '../tiles/TileFeatureCollector.js';
-import { FloatArrayBuilder }    from '../geometry/FloatArrayBuilder.js';
-import { appendThickLine }      from '../geometry/lineGeometry.js';
-import { simplifyLine }         from '../geometry/simplifyLine.js';
 import { LineLayering, lineLevel } from './lineLayering.js';
-import { classifyRings, clipPolygon, appendFlatPolygon } from '../geometry/polygonGeometry.js';
-import { BuildingGeometryBuilder, BuildingShading, roofVariation } from '../geometry/buildingGeometry.js';
+import { classifyRings, clipPolygon } from '../geometry/polygonGeometry.js';
+import { roofVariation } from '../geometry/buildingGeometry.js';
 
 
 const TMP_COLOR = new THREE.Color();
@@ -175,12 +172,26 @@ export class Tile {
     }
 
     /**
-     * (Re)builds all meshes from the payload using the current style.
-     * The previous meshes are replaced only once the new ones are ready.
+     * First half of a (re)build, on the main thread: decodes the tile and applies
+     * the style — `featureStyle` included — to describe what to draw. The geometry
+     * is then built from the plan's `job` by {@link buildTileGeometry}, in a worker
+     * when possible, and handed to {@link apply}.
+     *
+     * Features drawn with the same parameters share one command of the job, which
+     * lists them by their position in the tile. The worker decodes their geometry
+     * from the tile bytes itself: little data is copied to it.
      *
      * @param {TileBuildContext} ctx
+     * @returns {TilePlan}
+     *
+     * @typedef {Object} TilePlan
+     * @property {Object}     job        - Input of {@link buildTileGeometry} (plain data).
+     * @property {Object[]}   batches    - Batch descriptors (material, render order, …), in job order.
+     * @property {Object[][]} items      - For each command of the job, the features it draws (for picking).
+     * @property {Object}     footprints - Index of the building footprints, for {@link heightAt}.
+     * @property {number}     unitsPerMeter - Local units per metre of this build.
      */
-    build(ctx) {
+    plan(ctx) {
         const collector = new TileFeatureCollector(ctx.mapStyle, ctx.tileSchema, ctx.sourceLayers);
         const layers    = decodeVectorTile(this.#payload, collector.acceptsLayer);
         const { lines, polygons, buildings } = collector.collect(layers);
@@ -190,25 +201,39 @@ export class Tile {
         const size          = this.#frameSize;
         const toLocal       = size / ctx.tileWorldSize;            // world units → local units
         const unitsPerMeter = ctx.unitsPerMeter * toLocal;
-        this.#unitsPerMeter = unitsPerMeter;
 
-        const batches = new Map();
-        /**
-         * Output of the batch for a feature: records where the feature starts
-         * in it (vertex index), so a raycast hit can be traced back to it.
-         */
-        const batchFor = (kind, material, renderOrder, item) => {
-            const { castShadow, receiveShadow } = item.style;
-            const depthPrepass = kind === 'building' && item.style.depthPrepass;
+        const batches  = [];
+        const batchIds = new Map();
+        /** Index of the batch drawing `kind` with `material` at `renderOrder`. */
+        const batchFor = (kind, material, renderOrder, style) => {
+            const { castShadow, receiveShadow } = style;
+            const depthPrepass = kind === 'building' && style.depthPrepass;
             const key = `${kind}|${material.id}|${renderOrder}|${castShadow}|${receiveShadow}|${depthPrepass}`;
-            let batch = batches.get(key);
-            if (!batch) {
-                const out = kind === 'building' ? new BuildingGeometryBuilder() : new FloatArrayBuilder();
-                batch = { kind, material, renderOrder, castShadow, receiveShadow, depthPrepass, out, ranges: [] };
-                batches.set(key, batch);
+            if (!batchIds.has(key)) {
+                batchIds.set(key, batches.length);
+                batches.push({ kind, material, renderOrder, castShadow, receiveShadow, depthPrepass });
             }
-            batch.ranges.push(batch.out.length / 3, item);
-            return batch.out;
+            return batchIds.get(key);
+        };
+
+        const commands   = [];
+        const items      = [];
+        const commandIds = new Map();
+        /**
+         * Adds a feature to the command of its `key` (its style and all that can change
+         * how it is drawn); `create` gives the parameters of a new command.
+         */
+        const addToCommand = (key, item, create) => {
+            let id = commandIds.get(key);
+            if (id === undefined) {
+                id = commands.length;
+                commandIds.set(key, id);
+                commands.push({ ...create(), sourceLayer: item.sourceLayer, features: [] });
+                items.push([]);
+            }
+            commands[id].features.push(item.index);
+            items[id].push(item);
+            return commands[id];
         };
 
         // ── lines ────────────────────────────────────────────────────────────
@@ -219,49 +244,57 @@ export class Tile {
             const width = style.lineWidthMeters === null ? style.lineWidth * relative : style.lineWidthMeters * unitsPerMeter;
             if (!(width > 0)) continue;
 
-            const props        = feature.properties;
-            const level        = lineLevel(props);
-            const roundEnds    = level === 0;   // bridges / tunnels end flat on the road they join
-            const outlineExtra = style.outlineWidthMeters === null ? style.outlineWidth * relative : style.outlineWidthMeters * unitsPerMeter;
-            const y            = style.Y * toLocal;
-            const custom       = style.featureStyle ? featureOverrides(item) : null;
+            const level  = lineLevel(feature.properties);
+            const custom = style.featureStyle ? featureOverrides(item) : null;
             if (custom?.visible === false) continue;
             const material        = asMaterial(custom?.material) ?? style.material;
             const outlineMaterial = asMaterial(custom?.outlineMaterial) ?? style.outlineMaterial;
-            const fillOut      = batchFor('line', material, layering.fillOrder(style, level, isRamp), item);
-            const outlineOut   = outlineExtra > 0 && outlineMaterial
-                ? batchFor('outline', outlineMaterial, layering.outlineOrder(style, level), item)
-                : null;
-            const scale     = size / extent;
-            const tolerance = LINE_SIMPLIFY_TOLERANCE * extent;
-            const arcError  = tolerance * scale;   // round caps / joins: same accuracy as the simplification
 
-            for (const part of feature.loadGeometry()) {
-                const line = scaled(simplifyLine(part, tolerance), scale);
-                appendThickLine(fillOut, line, width, style.jointSegments, y, roundEnds, arcError);
-                if (outlineOut) {
-                    appendThickLine(outlineOut, line, width + outlineExtra, style.jointSegments, y, roundEnds, arcError);
-                }
-            }
+            const key = `${item.layer}.${item.type}|${item.sourceLayer}|${level}|${isRamp}|${material.id}|${outlineMaterial?.id}`;
+            addToCommand(key, item, () => {
+                const outlineExtra = style.outlineWidthMeters === null ? style.outlineWidth * relative : style.outlineWidthMeters * unitsPerMeter;
+                const tolerance    = LINE_SIMPLIFY_TOLERANCE * extent;
+                const scale        = size / extent;
+                return {
+                    type:          'line',
+                    batch:         batchFor('line', material, layering.fillOrder(style, level, isRamp), style),
+                    outlineBatch:  outlineExtra > 0 && outlineMaterial ? batchFor('outline', outlineMaterial, layering.outlineOrder(style, level), style) : -1,
+                    scale,
+                    tolerance,
+                    width,
+                    outlineWidth:  width + outlineExtra,
+                    jointSegments: style.jointSegments,
+                    y:             style.Y * toLocal,
+                    roundEnds:     level === 0,              // bridges / tunnels end flat on the road they join
+                    arcError:      tolerance * scale,        // round caps / joins: same accuracy as the simplification
+                };
+            });
         }
 
         // ── flat polygons ────────────────────────────────────────────────────
         for (const item of polygons) {
-            const { style, feature, extent } = item;
+            const { style, extent } = item;
             const custom = style.featureStyle ? featureOverrides(item) : null;
             if (custom?.visible === false) continue;
-            const out    = batchFor('polygon', asMaterial(custom?.material) ?? style.material, style.renderingOrder, item);
-            const margin = CLIP_MARGIN * extent;
-            for (const polygon of classifyRings(feature.loadGeometry())) {
-                const clipped = clipPolygon(polygon, -margin, extent + margin);
-                if (clipped) appendFlatPolygon(out, clipped, size / extent, style.Y * toLocal);
-            }
+            const material = asMaterial(custom?.material) ?? style.material;
+
+            addToCommand(`${item.layer}.${item.type}|${item.sourceLayer}|${material.id}`, item, () => {
+                const margin = CLIP_MARGIN * extent;
+                return {
+                    type:  'polygon',
+                    batch: batchFor('polygon', material, style.renderingOrder, style),
+                    min:   -margin,
+                    max:   extent + margin,
+                    scale: size / extent,
+                    y:     style.Y * toLocal,
+                };
+            });
         }
 
         // ── buildings ────────────────────────────────────────────────────────
-        const shadings   = new Map();
-        const roof       = { r: 1, g: 1, b: 1 };
-        const walls      = { r: 1, g: 1, b: 1 };
+        const shadings   = [];
+        const shadingOf  = new Map();   // style → index in `shadings`
+        const roofTints  = new Map();   // style → roof colour (the getter returns a copy)
         const footprints = new Map();
         for (const item of buildings) {
             const { style, feature, extent } = item;
@@ -290,41 +323,86 @@ export class Tile {
             const yBase = y + minHeight * k;
             if (yTop < yBase) continue;
 
-            let shading = shadings.get(style);
-            if (!shading) {
-                shading = { shade: buildingShading(style, y, k), tint: style.roofColor };
-                shadings.set(style, shading);
+            if (!shadingOf.has(style)) {
+                shadingOf.set(style, shadings.length);
+                shadings.push(buildingShading(style, y, k));
+                roofTints.set(style, style.roofColor);
             }
-            const tint = shading.tint;
+            const tint = roofTints.get(style);
             // Keyed by the drawn height, so roofs drawn at the same height (overlapping
             // parts, or every roof when the buildings are flattened) share one tone.
             const tone = roofVariation(height * style.height, style.colorVariation);
-            roof.r  = tint.r * tone * color.r;
-            roof.g  = tint.g * tone * color.g;
-            roof.b  = tint.b * tone * color.b;
-            walls.r = color.r;
-            walls.g = color.g;
-            walls.b = color.b;
 
-            const out    = batchFor('building', material, null, item);
-            const margin = CLIP_MARGIN * extent;
-            const min    = -margin;
-            const max    = extent + margin;
-            const scale = size / extent;
+            const command = addToCommand(`${item.layer}.${item.type}|${item.sourceLayer}|${material.id}`, item, () => {
+                const margin = CLIP_MARGIN * extent;
+                return {
+                    type:    'building',
+                    batch:   batchFor('building', material, null, style),
+                    shading: shadingOf.get(style),
+                    scale:   size / extent,
+                    min:     -margin,
+                    max:     extent + margin,
+                    yBase:   [],
+                    yTop:    [],
+                    raised:  [],
+                    roofs:   [],
+                    walls:   [],
+                };
+            });
+            command.yBase.push(yBase);
+            command.yTop.push(yTop);
+            command.raised.push(minHeight > 0);
+            command.roofs.push(tint.r * tone * color.r, tint.g * tone * color.g, tint.b * tone * color.b);
+            command.walls.push(color.r, color.g, color.b);
+
+            // Footprints for heightAt(). The worker clips the building again: cheaper than sending it.
             for (const polygon of classifyRings(feature.loadGeometry())) {
-                const clipped = clipPolygon(polygon, min, max);
-                if (!clipped) continue;
-                out.appendBuilding(clipped, scale, yBase, yTop, min, max, shading.shade, roof, walls, minHeight > 0);
-                indexFootprint(footprints, clipped, scale, yTop, size);
+                const part = clipPolygon(polygon, command.min, command.max);
+                if (part) indexFootprint(footprints, part, command.scale, yTop, size);
             }
         }
-        this.#footprints = { cells: footprints };
 
-        // Add the new geometry before removing the old one: no empty frame.
+        // Lit materials need normals and only `vertexColors` materials read colours:
+        // the defaults (unlit) do not pay for what they do not use.
+        const job = {
+            payload:  this.#payload,
+            batches:  batches.map(({ kind, material }) => ({ kind, normals: !material.isMeshBasicMaterial, colors: !!material.vertexColors })),
+            shadings,
+            commands,
+        };
+        return { job, batches, items, footprints: { cells: footprints }, unitsPerMeter };
+    }
+
+    /**
+     * Second half of a (re)build, on the main thread: hands the geometry built
+     * from {@link plan} to the batches. The previous meshes are replaced only once
+     * the new ones are in, so there is never an empty frame.
+     *
+     * @param {TileBuildContext} ctx
+     * @param {TilePlan} plan
+     * @param {import('./tileGeometry.js').TileGeometry} geometry
+     */
+    apply(ctx, plan, geometry) {
+        // Which feature draws which vertices, for picking.
+        const ranges = plan.batches.map(() => []);
+        let n = 0;
+        plan.job.commands.forEach((command, i) => {
+            for (const item of plan.items[i]) {
+                ranges[command.batch].push(geometry.starts[2 * n], item);
+                if (command.outlineBatch >= 0) ranges[command.outlineBatch].push(geometry.starts[2 * n + 1], item);
+                n++;
+            }
+        });
+
         const handles = [];
-        for (const batch of batches.values()) {
-            if (batch.out.length > 0) handles.push(ctx.batches.add(batch, createGeometry(batch), this.#group, batch.ranges, this));
-        }
+        plan.batches.forEach((batch, i) => {
+            const arrays = geometry.batches[i];
+            if (arrays.positions.length > 0) {
+                handles.push(ctx.batches.add(batch, createGeometry(batch, arrays), this.#group, ranges[i], this));
+            }
+        });
+        this.#footprints    = plan.footprints;
+        this.#unitsPerMeter = plan.unitsPerMeter;
 
         this.#removeGeometry();
         this.#handles = handles;
@@ -399,44 +477,37 @@ export class Tile {
 }
 
 
-function createGeometry({ kind, material, out }) {
+function createGeometry({ kind, material }, { positions, normals, colors }) {
     const geometry = new THREE.BufferGeometry();
-
-    // Lit materials need normals and only `vertexColors` materials read colours:
-    // the defaults (unlit) do not pay for what they do not use.
-    const needsNormals = !material.isMeshBasicMaterial;
-
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     if (kind === 'building') {
-        geometry.setAttribute('position', new THREE.BufferAttribute(out.positions.toFloat32Array(), 3));
-        if (needsNormals)          geometry.setAttribute('normal', new THREE.BufferAttribute(out.normals.toFloat32Array(), 3));
-        if (material.vertexColors) geometry.setAttribute('color',  new THREE.BufferAttribute(out.colorBytes(), 3, true));
+        if (normals) geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+        if (colors)  geometry.setAttribute('color',  new THREE.BufferAttribute(colors, 3, true));
         return geometry;
     }
-
-    const positions = out.toFloat32Array();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    if (needsNormals) {
-        const normals = new Float32Array(positions.length);
-        for (let i = 1; i < normals.length; i += 3) normals[i] = 1;
-        geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    // Flat map geometry faces up: lit materials get a constant normal.
+    if (!material.isMeshBasicMaterial) {
+        const up = new Float32Array(positions.length);
+        for (let i = 1; i < up.length; i += 3) up[i] = 1;
+        geometry.setAttribute('normal', new THREE.BufferAttribute(up, 3));
     }
     return geometry;
 }
 
 /**
- * Shading baked into the buildings of one style (see {@link BuildingShading}).
+ * Parameters of the shading baked into the buildings of one style (see BuildingShading).
  * The directional part is only baked for unlit materials: lit ones get it from the scene lights.
  * @param {import('../style/layers/BuildingLayer.js').BuildingLayer} style
  * @param {number} groundY - Local Y of the ground the buildings stand on.
  * @param {number} k       - Local units per (exaggerated) metre.
  */
 function buildingShading(style, groundY, k) {
-    return new BuildingShading({
+    return {
         groundY,
         aoTop:            groundY + AMBIENT_OCCLUSION_HEIGHT_M * k,
         ambientOcclusion: style.ambientOcclusion ?? 0,
         wallShading:      style.material?.isMeshBasicMaterial ? (style.wallShading ?? 0) : 0,
-    });
+    };
 }
 
 /** Cells per tile side of the footprint grid used by {@link Tile#heightAt}. */
@@ -527,12 +598,6 @@ function warnColorIgnored(material) {
     if (colorIgnored.has(material)) return;
     colorIgnored.add(material);
     console.warn('ThreeGeoPlay: featureStyle returned a building color, but the building material has vertexColors = false, so it is ignored. Create the material with { vertexColors: true }.');
-}
-
-function scaled(points, scale) {
-    const out = new Float64Array(points.length);
-    for (let i = 0; i < points.length; i++) out[i] = points[i] * scale;
-    return out;
 }
 
 function toFiniteNumber(value, fallback) {

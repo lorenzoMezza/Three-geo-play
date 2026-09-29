@@ -26,7 +26,10 @@ src/
   config/MapConfig.js  options, validated, with dirty tracking
   map/                 tiles on screen
     TileManager.js       which tiles are needed, downloads, build queue, ground planes
-    Tile.js              one tile: builds its geometry from the vector data
+    Tile.js              one tile: applies the style to its features (plan), then shows the geometry
+    tileGeometry.js      builds the geometry of a plan: plain data in, typed arrays out
+    GeometryBuilder.js   runs tileGeometry.js in web workers, or here where there are none
+    geometryWorker.js    starts a worker (tileGeometryWorker.js); the package build inlines it
     MeshBatches.js       draws the geometry of every tile with one BatchedMesh per material
     drawHooks.js         per-draw state: flat layers without depth writes, glass depth pre-pass
     lineLayering.js      draw order of roads and waterways (bridges, tunnels, casings)
@@ -41,7 +44,7 @@ src/
   style/               MapStyle, its layers (style/layers) and their base classes (style/core)
 ```
 
-A frame goes like this: `ThreeGeoPlay.onFrameUpdate()` applies config and style changes, moves the loaded area with the follow target, and lets `TileManager` download and build tiles in slices of a few milliseconds. `Tile` turns the vector data into geometry with the builders of `geometry/`, and `MeshBatches` adds it to the batched meshes.
+A frame goes like this: `ThreeGeoPlay.onFrameUpdate()` applies config and style changes, moves the loaded area with the follow target, and lets `TileManager` download and build tiles in slices of a few milliseconds. A build has three steps: `Tile.plan()` applies the style to the features of the tile (it runs user callbacks, so it stays on the main thread); `tileGeometry.js` turns the plan into geometry with the builders of `geometry/`, in a worker; `Tile.apply()` hands the geometry to `MeshBatches`, which adds it to the batched meshes. Both paths, worker and main thread, give the same geometry: the unit tests run the main-thread one.
 
 ## Guidelines
 

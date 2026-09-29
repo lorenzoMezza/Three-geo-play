@@ -9,6 +9,7 @@ import { TileSchema, resolveSchema, schemaReadsLayer } from './tileSchemas.js';
  * @property {string} type        - Name of the style type the feature was matched to.
  * @property {string} sourceLayer - Layer of the vector tile the feature comes from.
  * @property {import('./vectorTile.js').VectorTileFeature} feature
+ * @property {number} index  - Position of the feature in its tile layer.
  * @property {number} extent - Extent of the layer the feature belongs to.
  * @property {boolean} ramp  - Link road (lines only).
  */
@@ -63,21 +64,21 @@ export class TileFeatureCollector {
 
         for (const layer of layers) {
             const extent = layer.extent;
-            for (const feature of layer.features) {
+            layer.features.forEach((feature, index) => {
                 const isLine    = feature.type === GeomType.LINESTRING;
                 const isPolygon = feature.type === GeomType.POLYGON;
-                if (!isLine && !isPolygon) continue;
+                if (!isLine && !isPolygon) return;
 
                 const match = classify(layer.name, feature.properties);
-                if (!match) continue;
+                if (!match) return;
                 const found = this.#styleFor(match);
-                if (!found) continue;
+                if (!found) return;
                 const { style, type } = found;
                 const isLineStyle = style instanceof LineFeatureType;
-                const item = { style, layer: match.layer, type, sourceLayer: layer.name, feature, extent, ramp: false };
+                const item = { style, layer: match.layer, type, sourceLayer: layer.name, feature, index, extent, ramp: false };
 
                 if (isLine) {
-                    if (!isLineStyle) continue;
+                    if (!isLineStyle) return;
                     item.ramp = !!match.ramp;
                     lines.push(item);
                 } else if (match.layer === 'building') {
@@ -88,7 +89,7 @@ export class TileFeatureCollector {
                 } else if (!isLineStyle) {
                     polygons.push(item);
                 }
-            }
+            });
         }
 
         return { lines, polygons, buildings };

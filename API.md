@@ -39,6 +39,7 @@ import { ThreeGeoPlay, MapConfig, MapStyle, ViewMode, TileLayout, TileSchema } f
 | Batched drawing | three **r170+** (one `THREE.BatchedMesh` per material); older versions fall back to one mesh per tile |
 | Renderer | `THREE.WebGLRenderer`; create it with `{ stencil: true }` for [transparent buildings](#transparency) |
 | Runtime dependencies | none (vector tile decoder and triangulation are built in) |
+| Web workers | tile geometry is built in two workers started from the bundle (no extra file, no bundler setup); where there are none (Node, React Native, a Content-Security-Policy without `worker-src blob:`) it is built on the main thread, with the same result |
 
 Tested with three r150, r155, r160, r165, r168–r172, r175, r178, r180, r183 and r186; TypeScript 5.9 and 7 with `moduleResolution` `bundler`, `node16` and `nodenext`.
 
@@ -374,7 +375,7 @@ Lines are layered like a printed map within `[renderingOrder, renderingOrder + 1
 | `colorVariation` | 0–1 | `0.08` | Tone variation from roof to roof. |
 | `depthPrepass` | `boolean` | `true` | With a transparent material, blend each pixel once, with the nearest surface — see [Transparency](#transparency). No effect on opaque materials. |
 | `featureStyle` | `(feature) => BuildingFeatureStyle \| null` | `null` | Per-building colour, height, visibility or material — see [Data-driven styling](#data-driven-styling). |
-| `castShadow` / `receiveShadow` | `boolean` | `true` | Shadows. |
+| `castShadow` / `receiveShadow` | `boolean` | `true` | Shadows. While the material is transparent (glass) buildings cast none: the ground seen through them would show the shadow of every inner wall. |
 | `Y` | `number` | `0` | Base height of the buildings. |
 
 Chainable setters: `setMaterial(m)`, `setY(y)`, `setHeight(h)`. (`allowDetails` / `setAllowDetails()` are deprecated and have no effect.) `renderingOrder` is not applied to buildings. `getTypeByName()` returns the layer itself.
@@ -620,10 +621,11 @@ geo.getMapConfig().tileSchema = (sourceLayer, props) => {
 ## Rendering model
 
 - **Flat layers** (background, land use, land cover, water, waterways, roads) lie on the ground plane. They are drawn without writing depth — only during their own draw, the materials are not modified — and stacked by `renderingOrder`; they are still depth tested, so buildings and your objects in front of them always hide them. Three.js draws transparent materials after opaque ones, so a transparent flat layer ends up above every opaque one.
-- **Ground occluder**: with `occludeBelowGround` an invisible plane writes the ground depth before anything else is drawn, so the map hides what is below it like a solid floor. It sits at the map's ground (`Y` 0), pushed back by a polygon offset of one pixel of slope, so that what lies on the ground — the flat layers, flattened buildings, your own markers at `Y` 0 — never flickers against it. A surface of yours just below the map (a table under a diorama, your own terrain) is therefore not hidden near the map: draw it before the map instead (`renderOrder = -2000`), and the map layers are painted over it.
+- **Ground occluder**: with `occludeBelowGround` an invisible plane writes the ground depth before anything else is drawn, so the map hides what is below it like a solid floor. It sits at the map's ground (`Y` 0), pushed back by a small polygon offset (one pixel of slope plus a few depth steps), so that what lies on the ground — the flat layers, flattened buildings, your own markers at `Y` 0 — never flickers against it. A surface of yours just below the map (a table under a diorama, your own terrain) is therefore not hidden near the map: draw it before the map instead (`renderOrder = -2000`), and the map layers are painted over it.
 - **Buildings** are solid, depth-tested meshes with exact normals; they interact with your objects like any other mesh.
-- **Shadows**: enable `renderer.shadowMap.enabled` and a light with `castShadow`. Buildings cast and receive; the [shadow layer](#shadowlayer) shows shadows on the unlit flat layers; your objects cast on the map and on the buildings.
+- **Shadows**: enable `renderer.shadowMap.enabled` and a light with `castShadow`. Buildings cast (unless their material is transparent) and receive; the [shadow layer](#shadowlayer) shows shadows on the unlit flat layers; your objects cast on the map and on the buildings.
 - **Batching**: with three r170+ the geometry of all tiles sharing a material is drawn by one `THREE.BatchedMesh` (one draw call, per-tile frustum culling). Custom `ShaderMaterial`s are drawn per tile.
+- **Tile building**: the style (and `featureStyle`) is applied on the main thread, in time slices of a few milliseconds; the geometry is built in [web workers](#package-and-requirements). A tile appears once its geometry is ready, and a restyled tile keeps its old meshes until the new ones are in.
 - **Materials are never modified** by the library: `depthWrite`, `transparent`, `side` and the rest stay as you set them.
 
 ### Transparency
@@ -653,3 +655,4 @@ Without it the library warns once and coinciding faces may be blended twice. Set
 | `featureStyle` returns `color` for a material without `vertexColors` | One console warning. |
 | Building material with `opacity < 1` but `transparent: false` | One console warning. |
 | `zoomLevel` outside the source's range | The nearest served level is used, at the same scale; one console warning. |
+| Web workers blocked (e.g. a Content-Security-Policy without `worker-src blob:`) | Tiles are built on the main thread; one console warning. |
