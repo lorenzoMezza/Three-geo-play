@@ -14,6 +14,8 @@ export const TileSchema = Object.freeze({
     OPENMAPTILES: 'openmaptiles',
     /** Mapbox Streets v8 (`mapbox.mapbox-streets-v8`). */
     MAPBOX: 'mapbox',
+    /** Shortbread 1.0 — VersaTiles. */
+    SHORTBREAD: 'shortbread',
 });
 
 /**
@@ -110,8 +112,66 @@ function mapbox(sourceLayer, p) {
     }
 }
 
+// ─── Shortbread 1.0 (VersaTiles) ─────────────────────────────────────────────
+
+const SHORTBREAD_STREET = {
+    motorway: 'motorway',        trunk: 'trunk',         primary: 'primary',
+    secondary: 'secondary',      tertiary: 'tertiary',
+    unclassified: 'minor',       residential: 'minor',   living_street: 'minor',
+    pedestrian: 'pedestrian',    service: 'service',     track: 'track',
+    busway: 'busway',            bus_guideway: 'bus_guideway',
+    footway: 'path',             steps: 'path',          path: 'path',          cycleway: 'path',
+    rail: 'rail',                narrow_gauge: 'rail',
+    tram: 'transit',             light_rail: 'transit',  funicular: 'transit',
+    subway: 'transit',           monorail: 'transit',
+};
+
+const SHORTBREAD_WATER = { water: 'lake', reservoir: 'lake', basin: 'pond', canal: 'river', river: 'river', dock: 'dock' };
+
+/** `land` kinds drawn by the land use layer; the others are land cover. */
+const SHORTBREAD_LANDUSE = new Set([
+    'residential', 'industrial', 'commercial', 'retail', 'garages', 'railway', 'quarry',
+    'cemetery', 'grave_yard', 'playground', 'recreation_ground',
+]);
+
+const SHORTBREAD_ALIASES = { grave_yard: 'cemetery', string_bog: 'bog' };
+
+/** @type {TileSchemaFunction} */
+function shortbread(sourceLayer, p) {
+    switch (sourceLayer) {
+        case 'streets': {
+            const type = SHORTBREAD_STREET[p.kind];
+            return type ? result('transportation', undefined, type, p.link === true) : null;
+        }
+        case 'ferries':
+            return result('transportation', undefined, 'ferry');
+        case 'pier_lines':
+            return result('transportation', undefined, 'pier');
+        case 'buildings':
+            return result('building', undefined, 'building');
+        case 'ocean':
+            return result('water', undefined, 'ocean');
+        case 'water_polygons':
+            return p.kind === 'glacier' ? result('landcover', undefined, 'glacier') : result('water', undefined, SHORTBREAD_WATER[p.kind] ?? 'lake');
+        case 'water_lines':
+            return result('waterway', undefined, p.kind);
+        case 'land': {
+            const kind = SHORTBREAD_ALIASES[p.kind] ?? p.kind;
+            return result(SHORTBREAD_LANDUSE.has(p.kind) ? 'landuse' : 'landcover', undefined, kind);
+        }
+        case 'sites':
+            return result('landuse', undefined, p.kind);
+        case 'dam_polygons':
+            return result('landuse', undefined, 'dam');
+        default:
+            return null;
+    }
+}
+
+const SHORTBREAD_LAYERS = ['streets', 'ferries', 'pier_lines', 'buildings', 'ocean', 'water_polygons', 'water_lines', 'land', 'sites', 'dam_polygons'];
+
 /** Layer names the built-in schemas read: other layers are not even decoded. */
-const BUILT_IN_LAYERS = new Set([...OMT_LAYERS, 'road', 'landuse_overlay']);
+const BUILT_IN_LAYERS = new Set([...OMT_LAYERS, 'road', 'landuse_overlay', ...SHORTBREAD_LAYERS]);
 
 /**
  * Whether a tile layer can matter for the given schema setting.
@@ -131,10 +191,12 @@ export function schemaReadsLayer(setting, layerName) {
 export function resolveSchema(setting, layerNames) {
     if (typeof setting === 'function') return setting;
     if (setting === TileSchema.MAPBOX) return mapbox;
+    if (setting === TileSchema.SHORTBREAD) return shortbread;
     if (setting === TileSchema.OPENMAPTILES) return openMapTiles;
-    for (const name of layerNames) {
-        if (name === 'transportation' || name === 'landcover') return openMapTiles;
-        if (name === 'road' || name === 'landuse_overlay') return mapbox;
-    }
+    // Detected by layers that only one schema has (Mapbox styles also carry the
+    // `landcover` layer of Mapbox Terrain, so it cannot tell OpenMapTiles apart).
+    const names = new Set(layerNames);
+    if (names.has('road') || names.has('landuse_overlay')) return mapbox;
+    if (names.has('streets') || names.has('water_polygons')) return shortbread;
     return openMapTiles;
 }

@@ -4,6 +4,9 @@
 
 - Tile geometry is built in web workers (two per map): loading tiles takes about 60 % less time on the main thread, and its longest step drops from about 11 ms to 4 ms. Nothing to configure, the package starts the workers from code in its bundle. Where there are none (Node, React Native, a Content-Security-Policy without `worker-src blob:`) tiles are built on the main thread as before, with the same result.
 - New: `key`, a unique name of each feature, in picked features, `tile.getFeatures()` and the `featureStyle` argument. Use it to highlight what the user clicked: the tile data's `id` is 0 for most OpenMapTiles features, so styling by `id` could colour many buildings at once.
+- New: `TileSchema.SHORTBREAD`, detected automatically: VersaTiles (free, no key) works out of the box, bridges and tunnels included.
+- Mapbox styles (`mapbox://styles/…`) are recognised as Mapbox Streets even when the Terrain layers come first.
+- A source with none of the layers of the built-in schemas gets a console warning instead of an empty map without explanation.
 - Seen from above, the flat layers no longer flicker while the camera moves.
 - Transparent buildings no longer cast shadows: their hidden inner walls, and the walls between attached buildings, left dark stains inside the glass.
 - When nothing is loading, the batched meshes give back the memory left unused by tiles that were unloaded.
