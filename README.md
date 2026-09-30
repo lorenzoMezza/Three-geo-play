@@ -6,7 +6,7 @@
 [![license](https://img.shields.io/npm/l/lm-three-geo-play)](https://github.com/lorenzoMezza/Three-geo-play/blob/main/LICENSE)
 [![types](https://img.shields.io/npm/types/lm-three-geo-play)](https://github.com/lorenzoMezza/Three-geo-play/blob/main/API.md)
 
-### ▶️ [Try the live demo](https://lorenzomezza.github.io/Three-geo-play-demo-website/) — explore Rome, walk through the streets or fly over the city, in the browser.
+### 🔴 [Try the live demo](https://lorenzomezza.github.io/Three-geo-play-demo-website/) — explore Rome, walk through the streets or fly over the city, in the browser.
 
 [![ThreeGeoPlay demo: St. Peter's Square with extruded buildings and real-time shadows](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/hero.jpg)](https://lorenzomezza.github.io/Three-geo-play-demo-website/)
 
