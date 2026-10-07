@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.2.1
 
 - `jointSegments` is always respected: round caps and joins of roads and waterways no longer get fewer points on narrow lines or at low zoom levels, where an internal tolerance could reduce a cap to a single triangle.
 
