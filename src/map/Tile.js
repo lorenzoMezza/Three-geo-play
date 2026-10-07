@@ -288,7 +288,6 @@ export class Tile {
                     jointSegments: style.jointSegments,
                     y:             style.Y * toLocal,
                     roundEnds:     level === 0,              // bridges / tunnels end flat on the road they join
-                    arcError:      tolerance * scale,        // round caps / joins: same accuracy as the simplification
                 };
             });
         }

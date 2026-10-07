@@ -14,7 +14,7 @@ import { simplifyLine } from '../geometry/simplifyLine.js';
  * The job is plain data: the tile bytes (`payload`) and commands. Each command
  * draws a list of `features` of one tile layer (`sourceLayer`), given by their
  * position in it, with the same parameters:
- *  - `line`:     `scale`, `tolerance`, `width`, `jointSegments`, `y`, `roundEnds`, `arcError`,
+ *  - `line`:     `scale`, `tolerance`, `width`, `jointSegments`, `y`, `roundEnds`,
  *                and an optional outline: `outlineBatch` (-1 for none), `outlineWidth`;
  *  - `polygon`:  `min` / `max` (clip bounds), `scale`, `y`;
  *  - `building`: `scale`, `min`, `max`, `shading` (index in `shadings`), and for each
@@ -50,11 +50,11 @@ export function buildTileGeometry({ payload, batches, shadings, commands }) {
             const parts = features[index].loadGeometry();
 
             if (command.type === 'line') {
-                const { jointSegments, y, roundEnds, arcError } = command;
+                const { jointSegments, y, roundEnds } = command;
                 for (const part of parts) {
                     const line = scaled(simplifyLine(part, command.tolerance), command.scale);
-                    appendThickLine(out, line, command.width, jointSegments, y, roundEnds, arcError);
-                    if (outline) appendThickLine(outline, line, command.outlineWidth, jointSegments, y, roundEnds, arcError);
+                    appendThickLine(out, line, command.width, jointSegments, y, roundEnds);
+                    if (outline) appendThickLine(outline, line, command.outlineWidth, jointSegments, y, roundEnds);
                 }
             } else if (command.type === 'polygon') {
                 for (const polygon of classifyRings(parts)) {

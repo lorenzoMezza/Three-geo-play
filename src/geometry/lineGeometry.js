@@ -46,11 +46,8 @@ function pushFan(out, cx, cz, vx, vz, angle, steps, y) {
  * @param {number} y                - Height of the line.
  * @param {boolean} [roundEnds=true] - `false` gives flat ends (joins stay round),
  *   e.g. for bridges, whose ends must not spill over the road they connect to.
- * @param {number} [tolerance=0] - Largest allowed gap between a round cap / join
- *   and the true circle, in local units. Narrow lines then need fewer triangles;
- *   `0` always uses the `capSegments` resolution.
  */
-export function appendThickLine(out, line, width, capSegments, y, roundEnds = true, tolerance = 0) {
+export function appendThickLine(out, line, width, capSegments, y, roundEnds = true) {
     const half = width * 0.5;
     if (!(half > 0)) return;
 
@@ -67,11 +64,8 @@ export function appendThickLine(out, line, width, capSegments, y, roundEnds = tr
     if (n < 2) return;
 
     const round = capSegments >= 2;
-    // Angular step of the arcs: the user resolution, or coarser when the chord
-    // stays within `tolerance` of the circle (narrow lines).
-    let step = round ? Math.PI / (capSegments - 1) : Math.PI;
-    if (tolerance > 0 && tolerance < half) step = Math.max(step, 2 * Math.acos(1 - tolerance / half));
-    else if (tolerance >= half) step = Math.PI;
+    // Angular step of the arcs: always the user resolution, whatever the width.
+    const step     = round ? Math.PI / (capSegments - 1) : Math.PI;
     const capSteps = Math.max(1, Math.ceil(Math.PI / step - 1e-9));
 
     let prevDx = 0, prevDz = 0;
