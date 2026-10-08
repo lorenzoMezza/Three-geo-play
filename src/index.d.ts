@@ -346,6 +346,11 @@ export declare class BuildingLayer extends BaseFeatureType {
      */
     depthPrepass: boolean;
     /**
+     * Draw every building as a plain extrusion of its 2D footprint: one prism from the ground to its
+     * roof, no raised parts or undersides, one quad per wall (default `false`). Fewer triangles.
+     */
+    simpleExtrusion: boolean;
+    /**
      * Data-driven styling: called for every building of the tiles, returns overrides (or nothing).
      * Assign it again, or call `MapStyle.refresh()`, when what it returns changes.
      * @example

@@ -25,6 +25,7 @@ export class BuildingShading {
     #aoTop;
     #ambientOcclusion;
     #wallShading;
+    #splitWalls;
     #roofBrightness;
 
     /**
@@ -33,18 +34,21 @@ export class BuildingShading {
      * @param {number} options.aoTop            - Local Y above which walls are no longer darkened.
      * @param {number} options.ambientOcclusion - Darkening at the foot of the walls, 0–1.
      * @param {number} options.wallShading      - Baked directional shading, 0–1 (0 when the material is lit by the scene).
+     * @param {boolean} [options.splitWalls=true] - Split the walls at `aoTop` so the occlusion fades over its own
+     *   height; without it every wall is one quad and the occlusion fades over the whole wall.
      */
-    constructor({ groundY, aoTop, ambientOcclusion, wallShading }) {
+    constructor({ groundY, aoTop, ambientOcclusion, wallShading, splitWalls = true }) {
         this.#groundY          = groundY;
         this.#aoTop            = aoTop;
         this.#ambientOcclusion = aoTop > groundY ? ambientOcclusion : 0;
         this.#wallShading      = wallShading;
+        this.#splitWalls       = splitWalls;
         this.#roofBrightness   = this.#lambert(0, 1, 0);
     }
 
-    /** Local Y where the ambient occlusion ends (walls are split there), or `null` without occlusion. */
+    /** Local Y where walls are split (the ambient occlusion ends there), or `null` when they are not split. */
     get aoTop() {
-        return this.#ambientOcclusion > 0 ? this.#aoTop : null;
+        return this.#ambientOcclusion > 0 && this.#splitWalls ? this.#aoTop : null;
     }
 
     /**
