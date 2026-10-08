@@ -374,6 +374,7 @@ Lines are layered like a printed map within `[renderingOrder, renderingOrder + 1
 | `roofColor` | `THREE.ColorRepresentation` | white | Roof tint multiplied by the material colour. The getter returns a copy: assign to change it. |
 | `colorVariation` | 0–1 | `0.08` | Tone variation from roof to roof. |
 | `depthPrepass` | `boolean` | `true` | With a transparent material, blend each pixel once, with the nearest surface — see [Transparency](#transparency). No effect on opaque materials. |
+| `simpleExtrusion` | `boolean` | `false` | Draw every building as a plain extrusion of its 2D footprint: one prism from the ground to its roof, a roof and one quad per wall. The base height of building parts (`render_min_height` / `min_height`, `featureStyle`'s `minHeight`) is ignored, so there are no raised parts and no undersides, and walls are not split for `ambientOcclusion` (it fades over the whole wall). Fewer triangles, simpler shapes. |
 | `featureStyle` | `(feature) => BuildingFeatureStyle \| null` | `null` | Per-building colour, height, visibility or material — see [Data-driven styling](#data-driven-styling). |
 | `castShadow` / `receiveShadow` | `boolean` | `true` | Shadows. While the material is transparent (glass) buildings cast none: the ground seen through them would show the shadow of every inner wall. |
 | `Y` | `number` | `0` | Base height of the buildings. |
