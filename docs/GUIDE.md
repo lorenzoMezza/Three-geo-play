@@ -80,6 +80,7 @@ buildings.wallShading      = 0.6;      // walls facing away from a south-west su
 buildings.ambientOcclusion = 0.45;     // walls darken towards the ground
 buildings.roofColor        = 0xf6ebe2; // roof tint (the getter returns a copy: assign to change it)
 buildings.colorVariation   = 0.08;     // slight tone change from roof to roof
+buildings.simpleExtrusion  = false;    // true: plain footprint extrusions from the ground, fewer triangles
 ```
 
 With a lit material (`MeshLambertMaterial`, `MeshStandardMaterial`, …) your lights shade the walls and the baked colour adds the ambient occlusion and the roof tones. Wall colours depend only on the wall direction and height, so where OSM buildings overlap their shared walls get the same colour and cannot flicker.

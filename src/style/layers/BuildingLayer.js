@@ -31,6 +31,9 @@ export class BuildingLayer extends BaseFeatureType {
     /** @type {boolean} */
     #depthPrepass = true;
 
+    /** @type {boolean} */
+    #simpleExtrusion = false;
+
     /** Opaque, unlit warm white buildings using the baked shading, casting and receiving shadows. */
     constructor() {
         super(new THREE.MeshBasicMaterial({ color: 0xF2ECE1, vertexColors: true }), 0, -1);
@@ -68,6 +71,7 @@ export class BuildingLayer extends BaseFeatureType {
         this.#roofColor        = source.roofColor;
         this.#colorVariation   = source.colorVariation;
         this.#depthPrepass     = source.depthPrepass;
+        this.#simpleExtrusion  = source.simpleExtrusion;
     }
 
     // ── building-specific properties ─────────────────────────────────────────
@@ -159,6 +163,21 @@ export class BuildingLayer extends BaseFeatureType {
     get depthPrepass()      { return this.#depthPrepass; }
     set depthPrepass(value) {
         this.#depthPrepass = !!value;
+        this._touch();
+    }
+
+    /**
+     * Draw every building as a plain extrusion of its 2D footprint (default `false`):
+     * one prism from the ground to its roof, a roof and one quad per wall.
+     * The base height of OSM building parts (`render_min_height` / `min_height`,
+     * and `minHeight` from `featureStyle`) is ignored, so raised parts get no
+     * underside, and walls are not split for the ambient occlusion, which then
+     * fades over the whole wall. Fewer triangles, simpler shapes.
+     * @type {boolean}
+     */
+    get simpleExtrusion()      { return this.#simpleExtrusion; }
+    set simpleExtrusion(value) {
+        this.#simpleExtrusion = !!value;
         this._touch();
     }
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.0
+
+- New: `buildingLayer.simpleExtrusion`. Every building is drawn as a plain extrusion of its 2D footprint, one prism from the ground to its roof: no raised building parts, no undersides, one quad per wall. Fewer triangles for mobile and for stylised maps.
+
 ## 2.2.1
 
 - `jointSegments` is always respected: round caps and joins of roads and waterways no longer get fewer points on narrow lines or at low zoom levels, where an internal tolerance could reduce a cap to a single triangle.

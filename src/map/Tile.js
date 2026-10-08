@@ -338,6 +338,9 @@ export class Tile {
                 }
             }
 
+            // Simple extrusion: every footprint is one prism standing on the ground.
+            if (style.simpleExtrusion) minHeight = 0;
+
             const k     = unitsPerMeter * style.height;
             const y     = style.Y * toLocal;
             const yTop  = y + height * k;
@@ -532,6 +535,7 @@ function buildingShading(style, groundY, k) {
         aoTop:            groundY + AMBIENT_OCCLUSION_HEIGHT_M * k,
         ambientOcclusion: style.ambientOcclusion ?? 0,
         wallShading:      style.material?.isMeshBasicMaterial ? (style.wallShading ?? 0) : 0,
+        splitWalls:       !style.simpleExtrusion,
     };
 }
 
