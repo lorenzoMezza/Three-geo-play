@@ -1,4 +1,5 @@
 import { earcut } from './earcut.js';
+import { subdivideTriangles } from './tessellate.js';
 
 /**
  * Polygon helpers working on flat `[x0, y0, x1, y1, …]` rings expressed in
@@ -156,9 +157,11 @@ export function triangulate(polygon) {
  * @param {number[][]} polygon - `[exterior, ...holes]` in extent coordinates.
  * @param {number} scale       - Extent → local units.
  * @param {number} y
+ * @param {number} [maxEdge=0] - Longest triangle edge (extent units), 0 for no limit.
  */
-export function appendFlatPolygon(out, polygon, scale, y) {
-    const { flat, indices } = triangulate(polygon);
+export function appendFlatPolygon(out, polygon, scale, y, maxEdge = 0) {
+    const triangles = triangulate(polygon);
+    const { flat, indices } = subdivideTriangles(triangles.flat, triangles.indices, maxEdge);
     out.reserve(indices.length * 3);
     for (let i = 0; i < indices.length; i += 3) {
         const a = indices[i] * 2, b = indices[i + 1] * 2, c = indices[i + 2] * 2;

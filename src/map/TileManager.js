@@ -8,7 +8,7 @@ import { schemaReadsLayer }                   from '../tiles/tileSchemas.js';
 import { Tile }                               from './Tile.js';
 import { MeshBatches }                        from './MeshBatches.js';
 import { GeometryBuilder }                    from './GeometryBuilder.js';
-import { drawWithoutDepthWrite }              from './drawHooks.js';
+import { GROUND_STENCIL_BIT, drawWithoutDepthWrite, setFlatOrder } from './drawHooks.js';
 
 /** Missing tiles in a row, with none found, after which the tile URL is reported as wrong. */
 const MISSING_TILES_TO_REPORT = 8;
@@ -16,8 +16,13 @@ const MISSING_TILES_TO_REPORT = 8;
 /** Maximum number of tile downloads in flight. */
 const MAX_CONCURRENT_FETCHES = 16;
 
-/** Attempts per tile before giving up (until it leaves and re-enters the render area). */
-const MAX_FETCH_ATTEMPTS = 5;
+/**
+ * A tile whose download fails (no network, a server error) is tried again for as
+ * long as it is in the render area, ever later: 1 s, 2 s, 4 s… then every
+ * RETRY_MAX_DELAY_MS ({@link TileManager#retryNow} at once when the network is back).
+ * Failures are logged for the first LOGGED_FETCH_ATTEMPTS attempts only.
+ */
+const LOGGED_FETCH_ATTEMPTS = 5;
 const RETRY_BASE_DELAY_MS = 1000;
 const RETRY_MAX_DELAY_MS  = 16000;
 
@@ -109,8 +114,13 @@ export class TileManager {
     #buildQueue = [];
     #buildTimer = null;
 
-    /** Unit plane shared by the ground meshes (background, depth, shadows). */
+    /**
+     * Unit plane shared by the ground meshes (background, depth, shadows), in
+     * #planeSegments × #planeSegments squares: no edge longer than
+     * {@link MapConfig#maxSegmentMeters} once scaled to the loaded area.
+     */
     #planeGeometry = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+    #planeSegments = 1;
 
     /** @type {THREE.Mesh|null} Background colour plane. */
     #groundMesh = null;
@@ -122,9 +132,12 @@ export class TileManager {
      * Material of {@link #groundDepthMesh}: depth only, pushed slightly back so the map layers
      * lying on it always pass. Seen from above the slope term is zero, and one depth step is not
      * enough for the rounding of this large plane: the flat layers flickered, 4 steps never do.
+     * It also sets {@link GROUND_STENCIL_BIT} where it is drawn: the map covers those pixels.
      */
     #groundDepthMaterial = new THREE.MeshBasicMaterial({
         colorWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 4,
+        stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc, stencilRef: GROUND_STENCIL_BIT,
+        stencilWriteMask: GROUND_STENCIL_BIT, stencilZPass: THREE.ReplaceStencilOp,
     });
 
     /** @type {THREE.Mesh|null} Ground shadows ({@link MapStyle#shadowLayer}). */
@@ -150,6 +163,9 @@ export class TileManager {
 
     #pending = { reset: true, origin: true, placement: true, needed: true, borders: false, restyle: false, ground: false };
     #warnedStatuses = new Set();
+    /** Center (fractional tile coordinates) the needed tiles were last chosen for. */
+    #neededFX = null;
+    #neededFY = null;
     /** Tiles downloaded with data / refused, since the source was set: spots a wrong tile URL. */
     #tilesFound   = 0;
     #tilesRefused = 0;
@@ -169,7 +185,7 @@ export class TileManager {
         this.#root    = root;
         this.#notify  = notify;
         this.#layersMask = root.layers.mask;
-        this.#batches  = new MeshBatches(root);
+        this.#batches  = new MeshBatches(root, { frontToBack: mapConfig.flatLayersFrontToBack });
         this.#geometry = new GeometryBuilder();
         this.#buildingVertexColors = !!mapConfig.mapStyle.buildingLayer.material?.vertexColors;
         this.#groundDepthMaterial.name = 'ThreeGeoPlayGroundDepth';
@@ -221,8 +237,12 @@ export class TileManager {
         if (fields.has('tileWorldSize') || fields.has('worldOriginOffset'))  p.placement = true;
         if (fields.has('renderDistance') || fields.has('tileLayout'))        p.needed = true;
         if (fields.has('showTileBorders'))                                   p.borders = true;
-        if (fields.has('mapStyle') || fields.has('tileSchema'))              p.restyle = true;
+        if (fields.has('mapStyle') || fields.has('tileSchema') || fields.has('maxSegmentMeters')) p.restyle = true;
         if (fields.has('occludeBelowGround'))                                p.ground = true;
+        if (fields.has('flatLayersFrontToBack')) {
+            this.#batches.setFrontToBack(this.#config.flatLayersFrontToBack);
+            p.ground = true;
+        }
     }
 
     /**
@@ -346,13 +366,20 @@ export class TileManager {
         const size   = cfg.tileWorldSize;
         const offset = cfg.worldOriginOffset;
         const center = this.#centerPos ?? offset;
-        const cx     = Math.floor(this.#originFX + (center.x - offset.x) / size);
-        const cy     = Math.floor(this.#originFY + (center.z - offset.z) / size);
-        const centerMoved = cx !== this.#centerTX || cy !== this.#centerTY;
+        const fx     = this.#originFX + (center.x - offset.x) / size;
+        const fy     = this.#originFY + (center.z - offset.z) / size;
+        const cx     = Math.floor(fx);
+        const cy     = Math.floor(fy);
+        // The circular area follows the exact center: re-checked every 1/8 tile of movement.
+        const circularMoved = cfg.tileLayout === TileLayout.CIRCULAR
+            && (this.#neededFX === null || Math.hypot(fx - this.#neededFX, fy - this.#neededFY) > 1 / 8);
+        const centerMoved = cx !== this.#centerTX || cy !== this.#centerTY || circularMoved;
 
         if (centerMoved || p.needed) {
             this.#centerTX = cx;
             this.#centerTY = cy;
+            this.#neededFX = fx;
+            this.#neededFY = fy;
             this.#applyNeededTiles();
         }
 
@@ -394,6 +421,34 @@ export class TileManager {
     }
 
     /**
+     * Starts again at once the downloads waiting to be retried (tiles, and the tile
+     * source document): the network is back, there is no point in waiting out the
+     * back-off.
+     */
+    retryNow() {
+        if (this.#destroyed) return;
+        if (this.#sourceRetry !== null) {
+            clearTimeout(this.#sourceRetry);
+            this.#sourceRetry    = null;
+            this.#sourceAttempts = 0;
+            this.#resolveSource();
+        }
+        let queued = false;
+        for (const record of this.#tiles.values()) {
+            if (record.state !== State.WAITING) continue;
+            clearTimeout(record.retryTimer);
+            record.retryTimer = null;
+            record.attempts   = 0;
+            record.state      = State.QUEUED;
+            this.#fetchQueue.push(record);
+            queued = true;
+        }
+        if (!queued) return;
+        this.#fetchQueueSorted = false;
+        this.#drainFetchQueue();
+    }
+
+    /**
      * Aborts downloads, disposes every tile and the ground mesh.
      * The instance cannot be used afterwards.
      */
@@ -422,22 +477,22 @@ export class TileManager {
 
     #applyNeededTiles() {
         const cfg        = this.#config;
-        const R          = cfg.renderDistance;
         const isCircular = cfg.tileLayout === TileLayout.CIRCULAR;
-        const r2         = R * R;
         const cx         = this.#centerTX;
         const cy         = this.#centerTY;
         const tileCount  = 2 ** this.#zoom;
 
+        // Circular: every tile that comes within renderDistance tiles of the exact center.
+        // Grid: the (2·renderDistance + 1)² tiles around the center tile.
+        const R  = isCircular ? Math.ceil(cfg.renderDistance) + 1 : Math.round(cfg.renderDistance);
+        const r2 = cfg.renderDistance * cfg.renderDistance;
         const needed = new Map();
         for (let ty = cy - R; ty <= cy + R; ty++) {
             if (ty < 0 || ty >= tileCount) continue; // beyond the poles
             for (let tx = cx - R; tx <= cx + R; tx++) {
                 if (isCircular) {
-                    const ccx = cx + 0.5;
-                    const ccy = cy + 0.5;
-                    const dx  = Math.max(tx, Math.min(ccx, tx + 1)) - ccx;
-                    const dy  = Math.max(ty, Math.min(ccy, ty + 1)) - ccy;
+                    const dx = Math.max(tx, Math.min(this.#neededFX, tx + 1)) - this.#neededFX;
+                    const dy = Math.max(ty, Math.min(this.#neededFY, ty + 1)) - this.#neededFY;
                     if (dx * dx + dy * dy > r2) continue;
                 }
                 needed.set(`${tx}/${ty}`, [tx, ty]);
@@ -540,15 +595,16 @@ export class TileManager {
 
         const request = new AbortController();
         this.#sourceRequest = request;
-        resolveTileSource(tileUrl, { accessToken, signal: request.signal }).then(source => {
+        resolveTileSource(tileUrl, { accessToken, signal: request.signal, fetch: this.#config.fetch }).then(source => {
             if (this.#sourceRequest !== request || this.#destroyed) return;
             this.#sourceRequest  = null;
             this.#sourceAttempts = 0;
             this.#source         = source;
-            this.#checkZoomRange();
+            const zoomChanged    = this.#checkZoomRange();
             this.#checkSchema();
             this.#emit('sourceload', { source: this.source });
-            this.#drainFetchQueue();
+            // At another zoom the queued tiles are not the ones needed: the next frame chooses them again
+            if (!zoomChanged) this.#drainFetchQueue();
         }, err => {
             if (this.#sourceRequest !== request || this.#destroyed || err?.name === 'AbortError') return;
             this.#sourceRequest = null;
@@ -567,17 +623,19 @@ export class TileManager {
      * Keeps `zoomLevel` within the levels the source serves: outside them there
      * are no tiles (e.g. zoom 16 on a source that stops at 14), so the nearest
      * served level is used, at the same scale. Applied on the next frame.
+     * @returns {boolean} Whether the zoom level changed.
      */
     #checkZoomRange() {
         const source = this.#source;
         const cfg    = this.#config;
-        if (!source) return;
+        if (!source) return false;
         const zoom = THREE.MathUtils.clamp(cfg.zoomLevel, source.minZoom, source.maxZoom);
-        if (zoom === cfg.zoomLevel) return;
+        if (zoom === cfg.zoomLevel) return false;
         console.warn(`ThreeGeoPlay: the tile source serves zoom levels ${source.minZoom}–${source.maxZoom}: using zoomLevel ${zoom} instead of ${cfg.zoomLevel}.`);
         // Tiles of another zoom cover another area: keep the scale (unitsPerMeter does it by itself).
         if (cfg.unitsPerMeter === null) cfg.tileWorldSize *= 2 ** (cfg.zoomLevel - zoom);
         cfg.zoomLevel = zoom;
+        return true;
     }
 
     /** Warns when the source announces its layers and the schema reads none of them: nothing would be drawn. */
@@ -622,7 +680,7 @@ export class TileManager {
         const url = this.#tileUrl(x, record.ty);
 
         try {
-            const result = await fetchTileData(url, controller.signal);
+            const result = await fetchTileData(url, controller.signal, this.#config.fetch);
             if (!this.#isCurrent(record)) return;
 
             if (result.status === 'ok') {
@@ -642,15 +700,11 @@ export class TileManager {
             if (err?.name === 'AbortError' || !this.#isCurrent(record)) return;
 
             record.attempts++;
-            if (record.attempts >= MAX_FETCH_ATTEMPTS) {
-                record.state = State.FAILED;
-                console.error(`ThreeGeoPlay: giving up on tile ${this.#zoom}/${x}/${record.ty} after ${record.attempts} attempts`, err);
-                return;
-            }
-
-            const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** (record.attempts - 1), RETRY_MAX_DELAY_MS)
+            const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** Math.min(record.attempts - 1, 16), RETRY_MAX_DELAY_MS)
                         * (0.75 + Math.random() * 0.5);
-            console.warn(`ThreeGeoPlay: tile ${this.#zoom}/${x}/${record.ty} failed (${err?.message ?? err}), retrying in ${(delay / 1000).toFixed(1)}s`);
+            if (record.attempts <= LOGGED_FETCH_ATTEMPTS) {
+                console.warn(`ThreeGeoPlay: tile ${this.#zoom}/${x}/${record.ty} failed (${err?.message ?? err}), retrying in ${(delay / 1000).toFixed(1)}s`);
+            }
             record.state      = State.WAITING;
             record.retryTimer = setTimeout(() => {
                 record.retryTimer = null;
@@ -739,6 +793,7 @@ export class TileManager {
             batches:       this.#batches,
             tileSchema:    cfg.tileSchema,
             sourceLayers:  this.#source?.layers ?? [],
+            maxSegmentMeters: cfg.maxSegmentMeters,
         };
     }
 
@@ -853,6 +908,25 @@ export class TileManager {
     }
 
     /**
+     * The shared unit plane, split finely enough for a plane `extent` world units
+     * wide (a vertex shader bending the world, such as a curved horizon, moves
+     * only vertices: a plane of four corners kilometres apart would sag far below
+     * the map between them).
+     * @param {number} extent
+     * @returns {THREE.PlaneGeometry}
+     */
+    #planeOfSize(extent) {
+        const maxSegment = this.#config.maxSegmentMeters;
+        const segments = maxSegment ? Math.max(1, Math.ceil(extent / this.#unitsPerMeter / maxSegment)) : 1;
+        if (segments !== this.#planeSegments) {
+            this.#planeGeometry.dispose();
+            this.#planeGeometry = new THREE.PlaneGeometry(1, 1, segments, segments).rotateX(-Math.PI / 2);
+            this.#planeSegments = segments;
+        }
+        return this.#planeGeometry;
+    }
+
+    /**
      * Keeps one ground plane in sync with the loaded area.
      * @param {THREE.Mesh|null} mesh - Current plane, if any.
      * @param {boolean} show
@@ -880,11 +954,14 @@ export class TileManager {
         const size   = cfg.tileWorldSize;
         const offset = cfg.worldOriginOffset;
         const extent = (cfg.renderDistance * 2 + 1) * size;
+        mesh.geometry = this.#planeOfSize(extent);
         mesh.position.set(
             (this.#centerTX - this.#originFX + 0.5) * size + offset.x,
             configure(mesh) ?? 0,
             (this.#centerTY - this.#originFY + 0.5) * size + offset.z,
         );
+        // The order `configure` gave it is the style's: drawn with the other flat layers
+        if (flatLayer) setFlatOrder(mesh, mesh.renderOrder, cfg.flatLayersFrontToBack);
         mesh.scale.set(extent, 1, extent);
         mesh.updateMatrix();
         return mesh;

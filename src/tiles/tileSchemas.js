@@ -21,7 +21,7 @@ export const TileSchema = Object.freeze({
 /**
  * Result of a schema lookup.
  * @typedef {Object} SchemaMatch
- * @property {'transportation'|'building'|'water'|'waterway'|'landuse'|'landcover'} layer - Style layer.
+ * @property {'transportation'|'railway'|'building'|'water'|'waterway'|'landuse'|'landcover'} layer - Style layer.
  * @property {string|Array<string|undefined>} type - Style type name(s), most specific first.
  * @property {boolean} [ramp] - Link road (drawn under the road it merges into).
  */

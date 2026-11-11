@@ -1,5 +1,6 @@
 import { GeomType } from './vectorTile.js';
 import { LineFeatureType } from '../style/core/LineFeatureType.js';
+import { RailFeatureType } from '../style/core/RailFeatureType.js';
 import { TileSchema, resolveSchema, schemaReadsLayer } from './tileSchemas.js';
 
 /**
@@ -17,7 +18,7 @@ import { TileSchema, resolveSchema, schemaReadsLayer } from './tileSchemas.js';
 /**
  * Resolves the style of every feature of a decoded tile — through the tile
  * schema (OpenMapTiles, Mapbox Streets or a custom one) — and sorts the
- * renderable ones into lines, flat polygons and buildings.
+ * renderable ones into lines, flat polygons, buildings and railways.
  * Hidden features, and features without a matching style, are dropped.
  */
 export class TileFeatureCollector {
@@ -51,12 +52,13 @@ export class TileFeatureCollector {
 
     /**
      * @param {import('./vectorTile.js').VectorTileLayer[]} layers
-     * @returns {{ lines: CollectedFeature[], polygons: CollectedFeature[], buildings: CollectedFeature[] }}
+     * @returns {{ lines: CollectedFeature[], polygons: CollectedFeature[], buildings: CollectedFeature[], rails: CollectedFeature[] }}
      */
     collect(layers) {
         const lines     = [];
         const polygons  = [];
         const buildings = [];
+        const rails     = [];
         const classify  = resolveSchema(
             this.#schema,
             this.#sourceLayers.length > 0 ? this.#sourceLayers : layers.map(layer => layer.name),
@@ -77,7 +79,9 @@ export class TileFeatureCollector {
                 const isLineStyle = style instanceof LineFeatureType;
                 const item = { style, layer: match.layer, type, sourceLayer: layer.name, feature, index, extent, ramp: false };
 
-                if (isLine) {
+                if (isLine && style instanceof RailFeatureType) {
+                    rails.push(item);
+                } else if (isLine) {
                     if (!isLineStyle) return;
                     item.ramp = !!match.ramp;
                     lines.push(item);
@@ -86,13 +90,13 @@ export class TileFeatureCollector {
                     // `building:part`s often cover only a fraction of the building
                     // (e.g. just a dome or a tower), so skipping them leaves holes.
                     buildings.push(item);
-                } else if (!isLineStyle) {
+                } else if (!isLineStyle && !(style instanceof RailFeatureType)) {
                     polygons.push(item);
                 }
             });
         }
 
-        return { lines, polygons, buildings };
+        return { lines, polygons, buildings, rails };
     }
 
     /**

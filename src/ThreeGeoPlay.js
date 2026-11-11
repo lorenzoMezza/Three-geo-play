@@ -13,6 +13,9 @@ const now = typeof performance !== 'undefined' ? () => performance.now() : () =>
  */
 const FLAT_PICK_TOLERANCE = 0.01;
 
+/** The style's order of a flat map mesh (its `renderOrder` is another when drawn front to back). */
+const flatOrderOf = object => object.userData.flatOrder ?? object.renderOrder;
+
 /**
  * The map: loads the tiles around a target, applies config and style changes
  * once per frame ({@link onFrameUpdate}) and answers queries (heights, picking,
@@ -402,7 +405,8 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
     /**
      * Loading progress of the tiles in the current render area: `ready` tiles are
      * on screen, `empty` ones have no data, `loading` ones are queued, downloading
-     * or being built, `failed` ones gave up after retries. `rebuilding` counts the
+     * (or waiting to try again: a failed download is retried for as long as the tile
+     * is needed) or being built, `failed` ones could not be built. `rebuilding` counts the
      * tiles on screen still waiting to be rebuilt after a style change (0 once
      * the change is fully applied). All zero before {@link start}.
      *
@@ -419,6 +423,18 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
         const style = this.#mapConfig.mapStyle;
         if (style !== this.#lastStyle || style._stamp !== this.#lastStyleStamp) stats.rebuilding = stats.ready;
         return stats;
+    }
+
+    /**
+     * Starts again at once the downloads waiting to be retried after a failure (the
+     * tiles, and the tile source document): call it when the network comes back,
+     * rather than waiting out the back-off (up to 16 s for a tile, 32 s for the source).
+     *
+     * @example
+     * addEventListener('online', () => geoPlay.retryDownloads());
+     */
+    retryDownloads() {
+        this.#tileManager?.retryNow();
     }
 
     /**
@@ -501,7 +517,7 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
             }
             // Only flat intersections on the same spot compete, by render order.
             if (!flat || hit.distance - bestHit.distance > FLAT_PICK_TOLERANCE * bestHit.distance + 1e-6) break;
-            if (hit.object.renderOrder > bestHit.object.renderOrder) {
+            if (flatOrderOf(hit.object) > flatOrderOf(bestHit.object)) {
                 best = feature;
                 bestHit = hit;
             }

@@ -244,3 +244,57 @@ test('setMapStyle() restyles the loaded tiles without downloading them again', a
     assert.deepEqual([...materials], [night.buildingLayer.material]);
     geo.destroy();
 });
+
+test('flatLayersFrontToBack draws the same stack the other way round, and picks the same features', async () => {
+    const { geo, scene } = await loadMap(server.url);
+    const flats = () => {
+        const meshes = [];
+        // The opaque ones: a transparent layer (the ground shadows) is blended over the others, last
+        scene.traverse(object => { if (object.isMesh && object.userData.flatOrder !== undefined && !object.material.transparent) meshes.push(object); });
+        return meshes;
+    };
+    // How three.js orders opaque objects: by render order, then by material
+    const drawOrder = meshes => [...meshes].sort((a, b) => a.renderOrder - b.renderOrder || a.material.id - b.material.id);
+    const raycaster = new THREE.Raycaster();
+    const picks = () => {
+        const seen = [];
+        for (let x = -200; x <= 200; x += 40) {
+            for (let z = -200; z <= 200; z += 40) {
+                raycaster.set(new THREE.Vector3(x, 500, z), new THREE.Vector3(0, -1, 0));
+                const feature = geo.pickFeature(raycaster);
+                seen.push(feature ? `${feature.layer}.${feature.type}` : null);
+            }
+        }
+        return seen;
+    };
+
+    const painter = drawOrder(flats());
+    const pickedBefore = picks();
+    assert.ok(painter.length > 3, 'the map has flat layers');
+    assert.ok(painter.every(mesh => mesh.renderOrder === mesh.userData.flatOrder && !mesh.userData.frontToBack));
+    assert.equal(painter[0].name, 'ThreeGeoPlayGround', 'the ground is under everything');
+
+    geo.getMapConfig().flatLayersFrontToBack = true;
+    geo.onFrameUpdate();
+    const front = drawOrder(flats());
+    assert.deepEqual(front.map(mesh => mesh.id), painter.map(mesh => mesh.id).reverse(), 'the same stack, topmost first');
+    assert.ok(front.every(mesh => mesh.userData.frontToBack && mesh.renderOrder < 0));
+    assert.deepEqual(picks(), pickedBefore, 'what is seen at a point did not change');
+
+    // While it is drawn a layer claims its pixels in the stencil; the material is the style's again after
+    const mesh = front.find(object => object.userData.kind === 'polygon');
+    const { material } = mesh;
+    const before = { stencilWrite: material.stencilWrite, stencilFunc: material.stencilFunc, depthWrite: material.depthWrite };
+    mesh.onBeforeRender({}, scene, new THREE.PerspectiveCamera(), mesh.geometry, material, null);
+    assert.equal(material.stencilWrite, true);
+    assert.equal(material.stencilFunc, THREE.EqualStencilFunc);
+    assert.equal(material.stencilZPass, THREE.InvertStencilOp);
+    assert.equal(material.depthWrite, false);
+    mesh.onAfterRender({}, scene, null, mesh.geometry, material);
+    assert.deepEqual({ stencilWrite: material.stencilWrite, stencilFunc: material.stencilFunc, depthWrite: material.depthWrite }, before);
+
+    geo.getMapConfig().flatLayersFrontToBack = false;
+    geo.onFrameUpdate();
+    assert.deepEqual(drawOrder(flats()).map(object => object.id), painter.map(object => object.id), 'and back');
+    geo.destroy();
+});

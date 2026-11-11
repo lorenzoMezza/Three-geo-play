@@ -1,5 +1,6 @@
 import { FloatArrayBuilder } from './FloatArrayBuilder.js';
 import { triangulate } from './polygonGeometry.js';
+import { subdivideTriangles } from './tessellate.js';
 
 /**
  * Direction towards the light baked into unlit buildings: an afternoon sun from
@@ -120,9 +121,14 @@ export class BuildingGeometryBuilder {
      * @param {{ r: number, g: number, b: number }} roof  - Roof colour (linear RGB).
      * @param {{ r: number, g: number, b: number }} walls - Tint of the walls and underside (linear RGB).
      * @param {boolean} raised - Whether the part starts above the ground and needs an underside.
+     * @param {(x0: number, y0: number, x1: number, y1: number) => boolean} [isWallHidden] - Walls (extent
+     *   coordinates, ring order) for which it returns true are left out: e.g. walls shared with a taller neighbour.
+     * @param {number} [maxEdge=0] - Longest roof triangle edge (extent units), 0 for no limit; the walls follow
+     *   the rings, which the caller densifies.
      */
-    appendBuilding(polygon, scale, yBase, yTop, min, max, shading, roof, walls, raised) {
-        const { flat, indices } = triangulate(polygon);
+    appendBuilding(polygon, scale, yBase, yTop, min, max, shading, roof, walls, raised, isWallHidden = null, maxEdge = 0) {
+        const triangles = triangulate(polygon);
+        const { flat, indices } = subdivideTriangles(triangles.flat, triangles.indices, maxEdge);
         this.#appendCap(flat, indices, scale, yTop, 1, roof.r, roof.g, roof.b);
         if (!(yTop > yBase)) return;
 
@@ -140,6 +146,7 @@ export class BuildingGeometryBuilder {
                 const rx1 = ring[i], ry1 = ring[i + 1];
                 if ((rx0 === rx1 && (rx0 === min || rx0 === max)) ||
                     (ry0 === ry1 && (ry0 === min || ry0 === max))) continue;
+                if (isWallHidden?.(rx0, ry0, rx1, ry1)) continue;
 
                 const x0 = rx0 * scale, z0 = ry0 * scale;
                 const x1 = rx1 * scale, z1 = ry1 * scale;
