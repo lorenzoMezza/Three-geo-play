@@ -68,12 +68,13 @@ The OpenMapTiles, Mapbox Streets v8 and Shortbread schemas are detected automati
 
 ## Features
 
-- **3D city from OpenStreetMap** — roads, water, land use and buildings with true-scale heights
+- **3D city from OpenStreetMap** — roads, water, land use, buildings with true-scale heights and railways in relief
 - **Plays well with your scene** — your materials and lights, real-time shadows, ordinary depth-tested meshes, no flicker
 - **Fully styleable** — any material per layer, live changes, a ready-made night theme, per-feature styling from OSM data
 - **Made for games** — follow any object, `getHeightAt()` for collisions, `pickFeature()` for clicks, attach objects to tiles
 - **Any vector tile provider** — OpenFreeMap, MapTiler, Mapbox, VersaTiles, Carto, MapLibre styles or your own server
-- **Fast** — one draw call per material, tiles built in web workers without blocking the frame
+- **Fast** — one draw call per material, indexed geometry, tiles built in web workers without blocking the frame
+- **Sturdy on real networks** — failed downloads retried while the tiles are needed, `retryDownloads()` when the connection is back, your own `fetch` for caching
 
 | | |
 |---|---|

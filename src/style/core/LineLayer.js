@@ -1,12 +1,39 @@
 import * as THREE from 'three';
 import { BaseLayer } from './BaseLayer.js';
 import { LineFeatureType } from './LineFeatureType.js';
+import { nextStyleStamp } from './styleStamp.js';
 
 /**
  * A layer of line types (roads, waterways): adds the setters that change a
  * line property on every type at once.
  */
 export class LineLayer extends BaseLayer {
+
+    #raisedOutlines = true;
+    #stamp = 0;
+
+    /**
+     * Whether the outlines of bridges (lines above level 0) are drawn above the
+     * lines below them (default `true`), like the casing of a road on a printed map.
+     * `false` draws every outline under every fill of level 0 and up: a bridge still
+     * passes over the road below, without its edges, and where it joins a road at an
+     * angle its casing never cuts into that road's surface.
+     * @type {boolean}
+     */
+    get raisedOutlines() { return this.#raisedOutlines; }
+    set raisedOutlines(value) {
+        this.#raisedOutlines = !!value;
+        this.#stamp = nextStyleStamp();
+    }
+
+    /** @protected */
+    get _stamp() { return Math.max(super._stamp, this.#stamp); }
+
+    /** @protected */
+    _copyFrom(source, copyMaterial) {
+        super._copyFrom(source, copyMaterial);
+        this.#raisedOutlines = source.raisedOutlines;
+    }
 
     /**
      * Sets the fill and, optionally, the outline material of every type.

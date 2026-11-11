@@ -13,6 +13,7 @@ const SETTABLE = new Set([
     'tileUrl', 'accessToken', 'tileSchema', 'zoomLevel', 'renderDistance', 'tileWorldSize',
     'tileLayout', 'originLatLon', 'worldOriginOffset', 'viewMode', 'mapStyle',
     'showTileBorders', 'followUpdateInterval', 'occludeBelowGround', 'unitsPerMeter', 'pbfTileProviderZXYurl',
+    'fetch', 'maxSegmentMeters', 'flatLayersFrontToBack',
 ]);
 
 const MIN_ZOOM = 0;
@@ -62,6 +63,8 @@ export class MapConfig {
     // Current values: the documented accessors are below.
     #tileUrl                  = '';
     #accessToken              = '';
+    #fetch                    = null;
+    #maxSegmentMeters         = null;
     #tileSchema               = TileSchema.AUTO;
     #zoomLevel                = 18;
     #renderDistance           = 4;
@@ -75,6 +78,7 @@ export class MapConfig {
     #followUpdateIntervalInMs = 0;
     #showTileBorders          = false;
     #occludeBelowGround       = true;
+    #flatLayersFrontToBack    = false;
 
     /** Names of the fields changed since the last {@link flushDirtyState}. @type {Set<string>} */
     #dirtyFields = new Set();
@@ -151,6 +155,38 @@ export class MapConfig {
      * Changing it reloads all tiles.
      * @type {string}
      */
+    /**
+     * Function that downloads the tile source document and the tiles, with the
+     * signature of the global `fetch` (`(url, { signal }) => Promise<Response>`):
+     * e.g. to serve them from a cache. `null` (default) uses the global `fetch`.
+     * Takes effect on the next request; loaded tiles are kept.
+     * @type {((url: string, init: { signal: AbortSignal }) => Promise<Response>) | null}
+     */
+    /**
+     * Longest edge of the map geometry, in metres (default `null`: as long as the
+     * data makes it). Set it when a vertex shader bends the map — a curved world,
+     * a terrain — since it moves the vertices only: a long straight road or a large
+     * area stays flat between its far apart vertices, away from the bent surface,
+     * and its edges no longer meet the neighbouring geometry. For a world that drops
+     * by `k × d²`, edges of `2 × √(tolerance / k)` stay within `tolerance` of it.
+     * Changing it rebuilds the tiles.
+     * @type {number|null}
+     */
+    get maxSegmentMeters() { return this.#maxSegmentMeters; }
+    set maxSegmentMeters(value) {
+        if (value !== null && !(typeof value === 'number' && value > 0)) {
+            throw new Error('ThreeGeoPlay: maxSegmentMeters must be a positive number or null');
+        }
+        this.#maxSegmentMeters = value;
+        this.#dirtyFields.add('maxSegmentMeters');
+    }
+
+    get fetch() { return this.#fetch; }
+    set fetch(value) {
+        if (value !== null && typeof value !== 'function') throw new Error('ThreeGeoPlay: fetch must be a function or null');
+        this.#fetch = value;
+    }
+
     get accessToken() { return this.#accessToken; }
     set accessToken(value) {
         if (typeof value !== 'string') throw new Error('ThreeGeoPlay: accessToken must be a string');
@@ -191,7 +227,10 @@ export class MapConfig {
     }
 
     /**
-     * Number of tiles to load around the center tile (rounded to an integer, ≥ 0).
+     * How far tiles are loaded, in tiles (≥ 0). With the circular layout it is a
+     * radius around the exact map center (fractions allowed): every tile that comes
+     * within it is loaded. With the grid layout it is rounded to an integer: the
+     * tiles in each direction from the center tile.
      * @type {number}
      */
     get renderDistance() { return this.#renderDistance; }
@@ -199,7 +238,7 @@ export class MapConfig {
         if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
             throw new Error(`ThreeGeoPlay: Invalid renderDistance: ${value}. Must be a non-negative number`);
         }
-        this.#renderDistance = Math.round(value);
+        this.#renderDistance = value;
         this.#dirtyFields.add('renderDistance');
     }
 
@@ -363,6 +402,25 @@ export class MapConfig {
     set occludeBelowGround(value) {
         this.#occludeBelowGround = !!value;
         this.#dirtyFields.add('occludeBelowGround');
+    }
+
+    /**
+     * Draws the flat layers (ground, land, water, roads) front to back instead of one
+     * over the other (default false): the topmost first, each marking its pixels in the
+     * stencil (bit `FLAT_STENCIL_BIT`), so the layers below skip them before their
+     * shader runs. The picture is the same; every pixel of the map is shaded once
+     * instead of once per layer lying on it, which is what phones whose GPU does not
+     * remove hidden surfaces by itself (most Android ones) otherwise pay, the more the
+     * heavier the materials' shaders. Needs a stencil buffer
+     * (`new THREE.WebGLRenderer({ stencil: true })`) and opaque flat materials: a
+     * transparent one keeps the painter's order. The flat meshes then take render orders
+     * around -5000 (before the scene's own objects), whatever their `renderingOrder`.
+     * @type {boolean}
+     */
+    get flatLayersFrontToBack() { return this.#flatLayersFrontToBack; }
+    set flatLayersFrontToBack(value) {
+        this.#flatLayersFrontToBack = !!value;
+        this.#dirtyFields.add('flatLayersFrontToBack');
     }
 
     /**

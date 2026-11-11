@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { MapStyle } from '../src/index.js';
 
-const MULTI_TYPE_LAYERS = ['water', 'waterway', 'landuse', 'landcover', 'transportation'];
+const MULTI_TYPE_LAYERS = ['water', 'waterway', 'landuse', 'landcover', 'transportation', 'railway'];
 
 test('every type of the default style has a material and is reachable three ways', () => {
     const style = new MapStyle();
@@ -63,4 +63,18 @@ test('MapStyle.dark() is a complete style', () => {
     dark.forEachType((type, layerName, typeName) => {
         assert.ok(type.material, `${layerName}.${typeName}`);
     });
+});
+
+test('raisedOutlines: false draws bridge outlines with the ground ones, under every fill', async () => {
+    const { LineLayering } = await import('../src/map/lineLayering.js');
+    const style = new MapStyle();
+    const primary = style.transportationLayer.primary;
+    const raised = new LineLayering(style);
+    assert.ok(raised.outlineOrder(primary, 1) > raised.fillOrder(primary, 0), 'by default a bridge casing is above the road below');
+    style.transportationLayer.raisedOutlines = false;
+    const ground = new LineLayering(style);
+    assert.equal(ground.outlineOrder(primary, 1), ground.outlineOrder(primary, 0));
+    assert.ok(ground.outlineOrder(primary, 1) < ground.fillOrder(primary, 0));
+    assert.ok(ground.fillOrder(primary, 1) > ground.fillOrder(primary, 0), 'the bridge surface still passes over the road below');
+    assert.equal(style.clone().transportationLayer.raisedOutlines, false, 'kept by clone()');
 });

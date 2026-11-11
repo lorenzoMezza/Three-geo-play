@@ -59,5 +59,10 @@ export class LandUseLayer extends BaseLayer {
     constructor() {
         super();
         this._addTypes(polygonTypes(COLORS, -4));
+        // Protected areas are vast (whole regional parks, towns and sea included):
+        // under every other land use whatever materials the types share, they fill
+        // only the land nothing else describes
+        this.nature_reserve.renderingOrder = -4.5;
+        this.protected_area.renderingOrder = -4.5;
     }
 }

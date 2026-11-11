@@ -187,6 +187,10 @@ Loading progress of the tiles in the render area — for a progress bar, or to k
 
 The resolved tile source (URL templates, zoom range, attribution, layers), or `null` before `start()` and while a TileJSON / style URL is loading. Display `attribution`: providers require it.
 
+#### `retryDownloads(): void`
+
+Starts again at once the downloads waiting to be retried after a failure: the tiles in the render area, and the tile source document. Failed downloads are retried on their own with a back-off (up to 16 s for a tile, 32 s for the source); call this when the network comes back so the map fills in at once: `addEventListener('online', () => geoPlay.retryDownloads())`.
+
 ### Scene objects
 
 #### `getMapGroup(): THREE.Group`
@@ -243,9 +247,10 @@ geo.getMapConfig().set({ zoomLevel: 16, renderDistance: 6, unitsPerMeter: 1 });
 |---|---|---|---|
 | `tileUrl` | `string` | `''` (required) | Reloads every tile. A `{z}/{x}/{y}` template, a TileJSON URL, a MapLibre / Mapbox style URL or a `mapbox://` URL — see [Tile sources](#tile-sources-and-schemas). |
 | `accessToken` | `string` | `''` | Reloads every tile. Mapbox token for `mapbox://` URLs and `api.mapbox.com` tiles. |
+| `fetch` | `(url, { signal }) => Promise<Response>` \| `null` | `null` | Next request. Downloads the tile source document and the tiles instead of the global `fetch`, e.g. to serve them from a cache. |
 | `tileSchema` | `TileSchema \| TileSchemaFunction` | `TileSchema.AUTO` | Rebuilds the tiles from cached data. |
 | `zoomLevel` | integer 0–24 | `18` | Reloads every tile. OpenMapTiles providers usually stop at 14, Mapbox at 16: a level the source does not serve is replaced by the nearest one it serves, at the same scale (with a warning). |
-| `renderDistance` | integer ≥ 0 | `4` | Loads / unloads tiles. Tiles loaded in each direction from the centre tile. |
+| `renderDistance` | number ≥ 0 | `4` | Loads / unloads tiles. Circular layout: radius in tiles around the exact centre (fractions allowed), every tile coming within it is loaded. Grid layout: rounded, tiles in each direction from the centre tile. |
 | `tileLayout` | `TileLayout` | `CIRCULAR` | Loads / unloads tiles. Circular or square render area. |
 | `unitsPerMeter` | `number \| null` | `null` | Rescales the tiles. World units per metre; while set, `tileWorldSize` is derived from it and follows zoom and origin changes. |
 | `tileWorldSize` | `number > 0` | `1` | Rescales the tiles (no reload). World units per tile; setting it clears `unitsPerMeter`. |
@@ -256,6 +261,7 @@ geo.getMapConfig().set({ zoomLevel: 16, renderDistance: 6, unitsPerMeter: 1 });
 | `mapStyle` | `MapStyle` | `new MapStyle()` | Rebuilds the tiles from cached data. Same as `setMapStyle()`. |
 | `showTileBorders` | `boolean` | `false` | Draws a border around every tile (debugging). |
 | `occludeBelowGround` | `boolean` | `true` | The ground hides what is below it (an invisible depth plane at the map's ground, drawn first). `false` lets you see through it, e.g. with your own terrain. |
+| `flatLayersFrontToBack` | `boolean` | `false` | Draws the flat layers (ground, land, water, roads) front to back instead of one over the other: the topmost first, marking its pixels in the stencil (`FLAT_STENCIL_BIT`, `0x10`, exported), so the layers below skip them before their shader runs. The picture is the same, sample by sample; each pixel of the map is shaded once instead of once per layer on it — what GPUs that do not remove hidden surfaces themselves (most Android phones) otherwise pay. Needs `new THREE.WebGLRenderer({ stencil: true })` and opaque flat materials (a transparent one keeps the painter's order). The flat meshes take render orders around -5000. |
 | `zoomScaleFactor` | `number` (read-only) | — | Scale of the current zoom level relative to zoom 18. |
 | `pbfTileProviderZXYurl` | `string` | — | Deprecated alias of `tileUrl`. |
 
@@ -374,7 +380,7 @@ Lines are layered like a printed map within `[renderingOrder, renderingOrder + 1
 | `roofColor` | `THREE.ColorRepresentation` | white | Roof tint multiplied by the material colour. The getter returns a copy: assign to change it. |
 | `colorVariation` | 0–1 | `0.08` | Tone variation from roof to roof. |
 | `depthPrepass` | `boolean` | `true` | With a transparent material, blend each pixel once, with the nearest surface — see [Transparency](#transparency). No effect on opaque materials. |
-| `simpleExtrusion` | `boolean` | `false` | Draw every building as a plain extrusion of its 2D footprint: one prism from the ground to its roof, a roof and one quad per wall. The base height of building parts (`render_min_height` / `min_height`, `featureStyle`'s `minHeight`) is ignored, so there are no raised parts and no undersides, and walls are not split for `ambientOcclusion` (it fades over the whole wall). Fewer triangles, simpler shapes. |
+| `simpleExtrusion` | `boolean` | `false` | Draw every building as a plain extrusion of its 2D footprint: one prism from the ground to its roof, a roof and one quad per wall. The base height of building parts (`render_min_height` / `min_height`, `featureStyle`'s `minHeight`) is ignored, so there are no raised parts and no undersides, and walls are not split for `ambientOcclusion` (it fades over the whole wall). Footprints are simplified with the accuracy used for roads (about 2/4096 of a tile). Fewer triangles, simpler shapes. |
 | `featureStyle` | `(feature) => BuildingFeatureStyle \| null` | `null` | Per-building colour, height, visibility or material — see [Data-driven styling](#data-driven-styling). |
 | `castShadow` / `receiveShadow` | `boolean` | `true` | Shadows. While the material is transparent (glass) buildings cast none: the ground seen through them would show the shadow of every inner wall. |
 | `Y` | `number` | `0` | Base height of the buildings. |
@@ -551,7 +557,7 @@ Passed to `featureStyle`: `{ id, key, properties, sourceLayer, type }` (`key` as
 | `ready` | Tiles on screen. |
 | `empty` | Tiles without data (e.g. outside the provider's coverage). |
 | `loading` | Tiles queued, downloading or being built. |
-| `failed` | Tiles that gave up after retries. |
+| `failed` | Tiles whose data could not be built. A failed download is not a failure: it is retried (1 s, 2 s, 4 s… then every 16 s) for as long as the tile is in the render area, and counts as `loading` meanwhile. |
 | `rebuilding` | Tiles on screen still waiting for a style change (0 once it is applied). |
 
 ### TileSource
@@ -623,7 +629,7 @@ geo.getMapConfig().tileSchema = (sourceLayer, props) => {
 ## Rendering model
 
 - **Flat layers** (background, land use, land cover, water, waterways, roads) lie on the ground plane. They are drawn without writing depth — only during their own draw, the materials are not modified — and stacked by `renderingOrder`; they are still depth tested, so buildings and your objects in front of them always hide them. Three.js draws transparent materials after opaque ones, so a transparent flat layer ends up above every opaque one.
-- **Ground occluder**: with `occludeBelowGround` an invisible plane writes the ground depth before anything else is drawn, so the map hides what is below it like a solid floor. It sits at the map's ground (`Y` 0), pushed back by a small polygon offset (one pixel of slope plus a few depth steps), so that what lies on the ground — the flat layers, flattened buildings, your own markers at `Y` 0 — never flickers against it. A surface of yours just below the map (a table under a diorama, your own terrain) is therefore not hidden near the map: draw it before the map instead (`renderOrder = -2000`), and the map layers are painted over it.
+- **Ground occluder**: with `occludeBelowGround` an invisible plane writes the ground depth before anything else is drawn, so the map hides what is below it like a solid floor. It also sets the stencil bit `GROUND_STENCIL_BIT` (`0x20`, exported) wherever it is drawn: a full-screen backdrop drawn after it with a stencil test (`stencilFunc: EqualStencilFunc`, `stencilRef: 0`, `stencilFuncMask: GROUND_STENCIL_BIT`) shades only the pixels the map leaves free — a sky costs a third of the screen instead of all of it. The buildings use bit `GLASS_STENCIL_BIT` (`0x80`). It sits at the map's ground (`Y` 0), pushed back by a small polygon offset (one pixel of slope plus a few depth steps), so that what lies on the ground — the flat layers, flattened buildings, your own markers at `Y` 0 — never flickers against it. A surface of yours just below the map (a table under a diorama, your own terrain) is therefore not hidden near the map: draw it before the map instead (`renderOrder = -2000`), and the map layers are painted over it.
 - **Buildings** are solid, depth-tested meshes with exact normals; they interact with your objects like any other mesh.
 - **Shadows**: enable `renderer.shadowMap.enabled` and a light with `castShadow`. Buildings cast (unless their material is transparent) and receive; the [shadow layer](#shadowlayer) shows shadows on the unlit flat layers; your objects cast on the map and on the buildings.
 - **Batching**: with three r170+ the geometry of all tiles sharing a material is drawn by one `THREE.BatchedMesh` (one draw call, per-tile frustum culling). Custom `ShaderMaterial`s are drawn per tile.
