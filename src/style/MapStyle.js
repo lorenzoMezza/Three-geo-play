@@ -4,6 +4,7 @@ import { LandUseLayer } from './layers/LandUseLayer.js';
 import { LandCoverLayer } from './layers/LandCoverLayer.js';
 import { TransportationLayer } from './layers/TransportationLayer.js';
 import { WaterwayLayer } from './layers/WaterwayLayer.js';
+import { RailwayLayer } from './layers/RailwayLayer.js';
 import { BackgroundLayer } from './layers/BackgroundLayer.js';
 import { ShadowLayer } from './layers/ShadowLayer.js';
 import { BaseLayer } from './core/BaseLayer.js';
@@ -11,7 +12,7 @@ import { nextStyleStamp } from './core/styleStamp.js';
 import { applyDarkPreset } from './presets.js';
 
 /** Style layer names, in the order they are copied by {@link MapStyle#clone}. */
-const LAYER_NAMES = ['background', 'waterway', 'water', 'landcover', 'landuse', 'building', 'transportation', 'shadow'];
+const LAYER_NAMES = ['background', 'waterway', 'water', 'landcover', 'landuse', 'building', 'transportation', 'railway', 'shadow'];
 
 /**
  * The style of a map: one instance of each layer, as named properties. Changes
@@ -41,6 +42,9 @@ export class MapStyle {
     /** @type {BackgroundLayer} */
     #backgroundLayer;
 
+    /** @type {RailwayLayer} */
+    #railwayLayer;
+
     /** @type {ShadowLayer} */
     #shadowLayer;
 
@@ -54,6 +58,7 @@ export class MapStyle {
         this.#landUseLayer        = new LandUseLayer();
         this.#landCoverLayer      = new LandCoverLayer();
         this.#transportationLayer = new TransportationLayer();
+        this.#railwayLayer        = new RailwayLayer();
         this.#backgroundLayer     = new BackgroundLayer();
         this.#shadowLayer         = new ShadowLayer();
     }
@@ -140,8 +145,8 @@ export class MapStyle {
 
     /**
      * Retrieves a style layer by its internal OSM layer name.
-     * @param {'background'|'waterway'|'water'|'landcover'|'landuse'|'building'|'transportation'|'shadow'} layerName
-     * @returns {BackgroundLayer|WaterwayLayer|WaterLayer|LandCoverLayer|LandUseLayer|BuildingLayer|TransportationLayer|ShadowLayer|null}
+     * @param {'background'|'waterway'|'water'|'landcover'|'landuse'|'building'|'transportation'|'railway'|'shadow'} layerName
+     * @returns {BackgroundLayer|WaterwayLayer|WaterLayer|LandCoverLayer|LandUseLayer|BuildingLayer|TransportationLayer|RailwayLayer|ShadowLayer|null}
      */
     getStyleLayerByName(layerName) {
         switch (layerName) {
@@ -152,6 +157,7 @@ export class MapStyle {
             case 'landuse':        return this.#landUseLayer;
             case 'building':       return this.#buildingLayer;
             case 'transportation': return this.#transportationLayer;
+            case 'railway':        return this.#railwayLayer;
             case 'shadow':         return this.#shadowLayer;
             default:               return null;
         }
@@ -198,6 +204,15 @@ export class MapStyle {
      */
     get transportationLayer()       { return this.#transportationLayer; }
     set transportationLayer(layer)  { this.#transportationLayer = this.#checked(layer, TransportationLayer, 'transportationLayer'); }
+
+    /**
+     * Railways in relief: a raised bed with two rails (see {@link RailwayLayer}).
+     * The OpenMapTiles rail classes are drawn by {@link transportationLayer}
+     * unless the tile schema routes them here.
+     * @type {RailwayLayer}
+     */
+    get railwayLayer()      { return this.#railwayLayer; }
+    set railwayLayer(layer) { this.#railwayLayer = this.#checked(layer, RailwayLayer, 'railwayLayer'); }
 
     /**
      * The background (base fill) layer rendered beneath all other layers.

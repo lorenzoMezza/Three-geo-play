@@ -172,7 +172,9 @@ export class BuildingLayer extends BaseFeatureType {
      * The base height of OSM building parts (`render_min_height` / `min_height`,
      * and `minHeight` from `featureStyle`) is ignored, so raised parts get no
      * underside, and walls are not split for the ambient occlusion, which then
-     * fades over the whole wall. Fewer triangles, simpler shapes.
+     * fades over the whole wall. Footprints are simplified with the accuracy used
+     * for roads (about 2/4096 of a tile), dropping nearly collinear corners.
+     * Fewer triangles, simpler shapes.
      * @type {boolean}
      */
     get simpleExtrusion()      { return this.#simpleExtrusion; }

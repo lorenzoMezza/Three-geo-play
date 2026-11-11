@@ -2,6 +2,22 @@ import * as THREE from 'three';
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
+/**
+ * Stencil bit the transparent buildings use to be blended once per pixel: set where
+ * their glass was blended, until the end of the frame.
+ */
+export declare const GLASS_STENCIL_BIT: 0x80;
+/**
+ * Stencil bit set wherever the ground plane is drawn (`MapConfig.occludeBelowGround`):
+ * the map covers those pixels, so a backdrop drawn after it (a sky) can skip them.
+ */
+export declare const GROUND_STENCIL_BIT: 0x20;
+/**
+ * Stencil bit set by the first flat layer drawn on a pixel while the flat layers are drawn
+ * front to back (`MapConfig.flatLayersFrontToBack`).
+ */
+export declare const FLAT_STENCIL_BIT: 0x10;
+
 /** Available tile loading patterns. */
 export declare const TileLayout: {
     readonly CIRCULAR: 'circular';
@@ -26,7 +42,7 @@ export type TileSchema = typeof TileSchema[keyof typeof TileSchema];
 
 /** Style layer / type a tile feature is drawn with (see {@link TileSchemaFunction}). */
 export interface SchemaMatch {
-    layer: 'transportation' | 'building' | 'water' | 'waterway' | 'landuse' | 'landcover';
+    layer: 'transportation' | 'railway' | 'building' | 'water' | 'waterway' | 'landuse' | 'landcover';
     /** Type name(s) looked up in the layer, most specific first. */
     type: string | Array<string | undefined>;
     /** Link road: drawn under the road it merges into. */
@@ -80,16 +96,16 @@ export interface TileStats {
     ready: number;
     /** Tiles without data (e.g. outside the provider coverage). */
     empty: number;
-    /** Tiles queued, downloading or being built. */
+    /** Tiles queued, downloading (or waiting to retry a failed download) or being built. */
     loading: number;
-    /** Tiles that gave up after retries. */
+    /** Tiles whose data could not be built. */
     failed: number;
     /** Tiles on screen still waiting to be rebuilt after a style change (0 once it is applied). */
     rebuilding: number;
 }
 
 /** Style layer names. */
-export type StyleLayerName = 'background' | 'waterway' | 'water' | 'landcover' | 'landuse' | 'building' | 'transportation' | 'shadow';
+export type StyleLayerName = 'background' | 'waterway' | 'water' | 'landcover' | 'landuse' | 'building' | 'transportation' | 'railway' | 'shadow';
 
 /**
  * A tile on screen (see `ThreeGeoPlay.getTiles()` and the `tileload` / `tileunload` events).
@@ -295,6 +311,11 @@ export declare class BaseLayer<TName extends string, TType extends BaseFeatureTy
 
 /** Shared behaviour of the line layers (roads, waterways). */
 export declare class LineLayer<TName extends string> extends BaseLayer<TName, LineFeatureType> {
+    /**
+     * Whether bridge outlines are drawn above the lines below them (default `true`). `false` draws
+     * every outline under every fill of level 0 and up: no casing cuts into a road a bridge joins.
+     */
+    raisedOutlines: boolean;
     /** Pass `null` as `material` to change only the outlines. */
     setAllMaterials(material: THREE.Material | null, outlineMaterial?: THREE.Material): void;
     /** Sets `lineWidth` on every type. */
@@ -555,6 +576,60 @@ export declare class TransportationLayer extends LineLayer<TransportClassName> {
     static readonly admittedClasses: Set<TransportClassName>;
 }
 
+/**
+ * A railway type: a raised bed (`material`) with two rails on top (`railMaterial`),
+ * extruded like buildings. A road above the track hides it where it crosses, a road
+ * on its level (a level crossing) leaves the rails flush with it without the bed;
+ * tracks in tunnels are not drawn.
+ */
+export declare class RailFeatureType extends BaseFeatureType {
+    /** Material of the rails (`null`: no rails). */
+    railMaterial: THREE.Material | null;
+    /** Whether the track stands on a raised bed (`false`: rails flush with the ground, as a tram). */
+    bed: boolean;
+    /** Whether the two rails are drawn (`false`: a monorail beam, the bed alone). */
+    rails: boolean;
+    /** Width of the bed in metres (default 3.4). */
+    bedWidthMeters: number;
+    /** Height of the bed in metres (default 0.8). */
+    bedHeightMeters: number;
+    /** Distance between the rails in metres (default 1.435, standard gauge). */
+    gaugeMeters: number;
+    /** Width of each rail in metres (default 0.3). */
+    railWidthMeters: number;
+    /** Height of each rail above the bed or the ground in metres (default 0.2). */
+    railHeightMeters: number;
+    /** Directional shading of the walls, 0–1 (default 0.6), as `BuildingLayer.wallShading`. */
+    wallShading: number;
+    /** Darkening of the walls near the ground, 0–1 (default 0.45), as `BuildingLayer.ambientOcclusion`. */
+    ambientOcclusion: number;
+    /** With a transparent bed material, blend each pixel once (default `true`), as `BuildingLayer.depthPrepass`. */
+    depthPrepass: boolean;
+}
+
+export type RailwayClassName =
+    | 'rail' | 'light_rail' | 'subway' | 'transit' | 'preserved' | 'narrow_gauge' | 'funicular' | 'monorail' | 'tram';
+
+/**
+ * Railways in relief, one type per OpenMapTiles rail class or subclass. Tile schemas
+ * route features here with `layer: 'railway'` (the built-in schemas keep rails in
+ * the transportation layer).
+ */
+export declare class RailwayLayer extends BaseLayer<RailwayClassName, RailFeatureType> {
+    readonly rail: RailFeatureType;
+    readonly light_rail: RailFeatureType;
+    readonly subway: RailFeatureType;
+    readonly transit: RailFeatureType;
+    readonly preserved: RailFeatureType;
+    readonly narrow_gauge: RailFeatureType;
+    readonly funicular: RailFeatureType;
+    readonly monorail: RailFeatureType;
+    readonly tram: RailFeatureType;
+    /** Sets the bed material of every type and, when given, the rail material. */
+    setAllMaterials(material: THREE.Material, railMaterial?: THREE.Material): void;
+    static readonly admittedClasses: Set<RailwayClassName>;
+}
+
 // ─── MapStyle ─────────────────────────────────────────────────────────────────
 
 /** The layers of a {@link MapStyle}, by name. */
@@ -566,6 +641,7 @@ export interface StyleLayers {
     landuse: LandUseLayer;
     building: BuildingLayer;
     transportation: TransportationLayer;
+    railway: RailwayLayer;
     shadow: ShadowLayer;
 }
 
@@ -587,6 +663,8 @@ export declare class MapStyle {
     landUseLayer: LandUseLayer;
     landCoverLayer: LandCoverLayer;
     transportationLayer: TransportationLayer;
+    /** Railways in relief (bed and rails), for the features a tile schema routes to `'railway'`. */
+    railwayLayer: RailwayLayer;
     backgroundLayer: BackgroundLayer;
     /** Ground shadows, drawn while `renderer.shadowMap.enabled` is true. */
     shadowLayer: ShadowLayer;
@@ -642,6 +720,15 @@ export declare class MapConfig {
     pbfTileProviderZXYurl: string;
     /** Access token for Mapbox (`mapbox://` URLs and api.mapbox.com tiles). */
     accessToken: string;
+    /** Downloads the tile source document and the tiles instead of the global `fetch` (e.g. a cache); `null` = global `fetch`. */
+    fetch: ((url: string, init: { signal: AbortSignal }) => Promise<Response>) | null;
+    /**
+     * Longest edge of the map geometry in metres (default `null`: no limit). Set it when a
+     * vertex shader bends the map (a curved world, a terrain): it moves the vertices only,
+     * and a long edge stays straight, away from the bent surface. For a world dropping by
+     * `k × d²`, edges of `2 × √(tolerance / k)` stay within `tolerance`. Rebuilds the tiles.
+     */
+    maxSegmentMeters: number | null;
     /** How tile layers map onto `MapStyle`: a `TileSchema` (default `'auto'`) or a custom function. */
     tileSchema: TileSchema | TileSchemaFunction;
     /**
@@ -671,6 +758,12 @@ export declare class MapConfig {
      */
     occludeBelowGround: boolean;
     /**
+     * Draws the flat layers front to back instead of one over the other (default `false`): the
+     * same picture, every pixel of the map shaded once instead of once per layer lying on it.
+     * Needs a stencil buffer (bit `FLAT_STENCIL_BIT`) and opaque flat materials.
+     */
+    flatLayersFrontToBack: boolean;
+    /**
      * World units per metre, e.g. `1` for a scene in metres. When set, `tileWorldSize` is derived
      * from it (and follows zoom / origin changes); setting `tileWorldSize` clears it. Default `null`.
      */
@@ -695,6 +788,8 @@ export declare class MapConfig {
 export interface MapConfigOptions {
     tileUrl?: string;
     accessToken?: string;
+    fetch?: ((url: string, init: { signal: AbortSignal }) => Promise<Response>) | null;
+    maxSegmentMeters?: number | null;
     tileSchema?: TileSchema | TileSchemaFunction;
     zoomLevel?: number;
     renderDistance?: number;
@@ -706,6 +801,7 @@ export interface MapConfigOptions {
     mapStyle?: MapStyle;
     showTileBorders?: boolean;
     occludeBelowGround?: boolean;
+    flatLayersFrontToBack?: boolean;
     unitsPerMeter?: number | null;
     followUpdateInterval?: number;
     /** @deprecated Use `tileUrl`. */
@@ -813,6 +909,9 @@ export declare class ThreeGeoPlay extends THREE.EventDispatcher<ThreeGeoPlayEven
 
     /** Resolved tile source, including the attribution to display; `null` before `start()` / while loading (see the `sourceload` event). */
     getTileSource(): TileSource | null;
+
+    /** Starts again at once the downloads waiting to be retried after a failure (tiles and tile source): call it when the network comes back. */
+    retryDownloads(): void;
 
     /**
      * The group containing every map mesh, added to the scene by `start()` unless you parented it
