@@ -276,6 +276,7 @@ Set them in the constructor options, with `config.set({ … })`, or one by one o
 | `followUpdateInterval` | Minimum ms between follow updates (`0` = every frame) | `0` |
 | `showTileBorders` | Debug tile boundaries | `false` |
 | `occludeBelowGround` | The map ground hides what is below it | `true` |
+| `flatLayersFrontToBack` | Flat layers drawn front to back: the same picture, each pixel shaded once (needs a stencil buffer, opaque flat materials) | `false` |
 
 Invalid values and unknown option names throw an `Error`. `originLatLon` and `worldOriginOffset` are frozen objects: assign a new object to change them. (`pbfTileProviderZXYurl` still works as a deprecated alias of `tileUrl`.)
 

@@ -13,9 +13,10 @@ const REQUEST_TIMEOUT_MS = 20000;
  * @param {string} url
  * @param {AbortSignal} [signal] - Cancels the request (rejects with `AbortError`).
  * @param {(response: Response) => Promise<T>} [read] - Reads the response before the timeout is cleared.
+ * @param {typeof fetch | null} [fetchFn] - Replaces the global `fetch` ({@link MapConfig#fetch}).
  * @returns {Promise<T>}
  */
-export async function fetchWithTimeout(url, signal, read = async response => response) {
+export async function fetchWithTimeout(url, signal, read = async response => response, fetchFn = null) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
     const controller = new AbortController();
@@ -25,7 +26,7 @@ export async function fetchWithTimeout(url, signal, read = async response => res
     const timer  = setTimeout(() => { timedOut = true; controller.abort(); }, REQUEST_TIMEOUT_MS);
 
     try {
-        return await read(await fetch(url, { signal: controller.signal }));
+        return await read(await (fetchFn ?? fetch)(url, { signal: controller.signal }));
     } catch (err) {
         if (timedOut) throw new Error(`timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
         throw err;
@@ -50,9 +51,10 @@ export async function fetchWithTimeout(url, signal, read = async response => res
  *
  * @param {string}      url
  * @param {AbortSignal} [signal]
+ * @param {typeof fetch | null} [fetchFn] - Replaces the global `fetch` ({@link MapConfig#fetch}).
  * @returns {Promise<TileFetchResult>}
  */
-export default function fetchTileData(url, signal) {
+export default function fetchTileData(url, signal, fetchFn = null) {
     return fetchWithTimeout(url, signal, async res => {
         if (PERMANENT_STATUSES.has(res.status)) {
             await res.body?.cancel();
@@ -77,7 +79,7 @@ export default function fetchTileData(url, signal) {
         }
 
         return { status: 'ok', payload, httpStatus: res.status };
-    });
+    }, fetchFn);
 }
 
 async function gunzip(bytes) {

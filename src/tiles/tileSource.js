@@ -42,15 +42,16 @@ function permanentError(message) {
  *    which need an access token.
  *
  * @param {string} url
- * @param {{ accessToken?: string, signal?: AbortSignal }} [options]
+ * @param {{ accessToken?: string, signal?: AbortSignal, fetch?: typeof fetch | null }} [options]
+ *   `fetch` replaces the global `fetch` ({@link MapConfig#fetch}).
  * @returns {Promise<TileSource>}
  */
-export async function resolveTileSource(url, { accessToken = '', signal } = {}) {
+export async function resolveTileSource(url, { accessToken = '', signal, fetch = null } = {}) {
     if (isTileTemplate(url)) return templateSource(url, accessToken);
-    return resolveDocument(url, accessToken, signal, 0);
+    return resolveDocument(url, accessToken, signal, fetch, 0);
 }
 
-async function resolveDocument(url, accessToken, signal, depth) {
+async function resolveDocument(url, accessToken, signal, fetchFn, depth) {
     if (depth > 3) throw permanentError('too many nested tile source references');
     if (url.startsWith('pmtiles://')) {
         throw permanentError('PMTiles sources are not supported; serve the tiles as {z}/{x}/{y} (e.g. with pmtiles serve or martin)');
@@ -62,7 +63,7 @@ async function resolveDocument(url, accessToken, signal, depth) {
         json:   response.ok
             ? await response.json().catch(() => { throw permanentError(`${redactToken(documentUrl)} did not return JSON`); })
             : null,
-    }));
+    }), fetchFn);
     if (!json) {
         const message = `HTTP ${status} loading tile source ${redactToken(documentUrl)}`;
         throw [400, 401, 403, 404].includes(status) ? permanentError(message) : new Error(message);
@@ -78,7 +79,7 @@ async function resolveDocument(url, accessToken, signal, depth) {
             const next = source.url.startsWith('mapbox://') || source.url.startsWith('pmtiles://')
                 ? source.url
                 : resolveUrl(source.url, documentUrl);
-            return resolveDocument(next, accessToken, signal, depth + 1);
+            return resolveDocument(next, accessToken, signal, fetchFn, depth + 1);
         }
     }
     throw permanentError(`${redactToken(documentUrl)} is neither a TileJSON document nor a map style`);

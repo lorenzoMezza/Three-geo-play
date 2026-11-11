@@ -62,3 +62,21 @@ test('simpleExtrusion is off by default and copied by clone()', () => {
     style.buildingLayer.simpleExtrusion = true;
     assert.equal(style.clone().buildingLayer.simpleExtrusion, true);
 });
+
+test('simpleExtrusion leaves out walls shared with a neighbour at least as tall', async () => {
+    const { BuildingGeometryBuilder, BuildingShading } = await import('../src/geometry/buildingGeometry.js');
+    const shading = new BuildingShading({ groundY: 0, aoTop: 10, ambientOcclusion: 0, wallShading: 0 });
+    const white = { r: 1, g: 1, b: 1 };
+    // Two squares side by side; the shared wall runs (10,0)→(10,10) in the left one, the other way in the right one.
+    const left  = [[0, 0, 10, 0, 10, 10, 0, 10]];
+    const right = [[10, 0, 20, 0, 20, 10, 10, 10]];
+    const walls = (tops, polygon, top) => {
+        const out = new BuildingGeometryBuilder();
+        const hidden = (x0, y0, x1, y1) => (tops.get(`${x1},${y1},${x0},${y0}`) ?? -1) >= top;
+        out.appendBuilding(polygon, 1, 0, top, -100, 100, shading, white, white, false, hidden);
+        return (out.length / 3 - 6) / 6;   // vertices minus the two roof triangles, 6 per wall
+    };
+    const tops = new Map([['10,10,10,0', 20], ['10,0,10,10', 30]]);   // left's wall: 30 m, right's wall: 20 m
+    assert.equal(walls(tops, left, 30), 4, 'the taller building keeps its shared wall');
+    assert.equal(walls(tops, right, 20), 3, 'the lower one drops it: it is inside its neighbour');
+});

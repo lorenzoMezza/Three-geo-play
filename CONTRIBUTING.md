@@ -52,4 +52,4 @@ A frame goes like this: `ThreeGeoPlay.onFrameUpdate()` applies config and style 
 - **Never modify the user's materials.** Per-draw changes (depth writes, the glass pre-pass) are made in `drawHooks.js` and restored after the draw.
 - **No dependencies** besides `three` (a peer dependency).
 - **Style:** ES modules, 4-space indentation, private `#fields`, JSDoc on anything exported. Comments say *why*, in English.
-- **Tests:** add or update a test in `test/` for behaviour you change. Rendering changes also need a look in the playground or the [demo](https://github.com/lorenzoMezza/Three-geo-play-demo-website).
+- **Tests:** add or update a test in `test/` for behaviour you change. Rendering changes also need a look in the playground or the [demo](demo/) (`cd demo && npm install && npm run dev`).

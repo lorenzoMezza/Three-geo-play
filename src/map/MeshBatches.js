@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 
-import { drawWithoutDepthWrite, drawWithDepthPrepass } from './drawHooks.js';
+import { drawWithoutDepthWrite, drawWithDepthPrepass, setFlatOrder } from './drawHooks.js';
 
-/** Initial capacity of a batch; it doubles whenever it runs out of room. */
-const INITIAL_VERTICES  = 1 << 15;
-const INITIAL_INSTANCES = 32;
+/** Initial capacity of a batch; vertices and indices each double whenever they run out of room. */
+const INITIAL_VERTICES  = 1 << 12;  // most batches hold a few hundred vertices; the big ones double in a few steps
+const INITIAL_INDICES   = INITIAL_VERTICES * 2;
+const INITIAL_INSTANCES = 64;  // room for every tile of a usual scene (≤ 50) without regrowing
 
 /**
  * `THREE.BatchedMesh` with the capacity management used here (resizing,
@@ -52,11 +53,29 @@ export class MeshBatches {
     /** Meshes drawing buildings, for {@link updateShadowCasting}. @type {Set<THREE.Mesh>} */
     #buildingMeshes = new Set();
 
+    /** Flat layers drawn front to back ({@link MapConfig#flatLayersFrontToBack}). */
+    #frontToBack = false;
+
+    /** Meshes drawing flat layers, for {@link setFrontToBack}. @type {Set<THREE.Mesh>} */
+    #flatMeshes = new Set();
+
     /**
      * @param {THREE.Object3D} root - Parent of the batched meshes.
+     * @param {{ frontToBack?: boolean }} [options]
      */
-    constructor(root) {
+    constructor(root, { frontToBack = false } = {}) {
         this.#root = root;
+        this.#frontToBack = !!frontToBack;
+    }
+
+    /**
+     * Draws the flat layers front to back, or in painter's order (see drawHooks.js
+     * setFlatOrder): applied to the meshes there are and to the ones made later.
+     * @param {boolean} frontToBack
+     */
+    setFrontToBack(frontToBack) {
+        this.#frontToBack = !!frontToBack;
+        for (const mesh of this.#flatMeshes) setFlatOrder(mesh, mesh.userData.flatOrder, this.#frontToBack);
     }
 
     /**
@@ -64,16 +83,18 @@ export class MeshBatches {
      * @param {BatchDescriptor} descriptor
      * @param {THREE.BufferGeometry} geometry - Consumed: do not reuse it.
      * @param {THREE.Object3D} tileObject - Parent for the per-tile fallback mesh.
-     * @param {Array} ranges - Flat `[firstVertex, feature, …]` list: which feature each vertex range draws.
+     * @param {Array} ranges - Flat `[firstCorner, feature, …]` list: which feature each range of corners (index entries) draws.
      * @param {Object} tile - The tile the geometry belongs to.
      * @returns {BatchHandle}
      */
     add(descriptor, geometry, tileObject, ranges, tile) {
         const { material } = descriptor;
+        const flat = descriptor.kind !== 'building';
         if (!BATCHING_SUPPORTED || material.isShaderMaterial) {
-            const handle = new MeshHandle(descriptor, geometry, tileObject, { ranges, tile });
+            const handle = new MeshHandle(descriptor, geometry, tileObject, { ranges, tile }, this.#frontToBack, mesh => this.#flatMeshes.delete(mesh));
             this.#owners.set(handle.object, handle);
-            if (descriptor.kind === 'building') this.#buildingMeshes.add(handle.object);
+            if (flat) this.#flatMeshes.add(handle.object);
+            else this.#buildingMeshes.add(handle.object);
             return handle;
         }
 
@@ -84,10 +105,15 @@ export class MeshBatches {
         ].join('|');
         let batch = this.#batches.get(key);
         if (!batch) {
-            batch = new Batch(descriptor, this.#root, () => this.#batches.delete(key));
+            const created = new Batch(descriptor, this.#root, this.#frontToBack, () => {
+                this.#batches.delete(key);
+                this.#flatMeshes.delete(created.mesh);
+            });
+            batch = created;
             this.#batches.set(key, batch);
             this.#owners.set(batch.mesh, batch);
-            if (descriptor.kind === 'building') this.#buildingMeshes.add(batch.mesh);
+            if (flat) this.#flatMeshes.add(batch.mesh);
+            else this.#buildingMeshes.add(batch.mesh);
         }
         return batch.add(geometry, { ranges, tile });
     }
@@ -133,6 +159,7 @@ export class MeshBatches {
         for (const batch of [...this.#batches.values()]) batch.dispose();
         this.#batches.clear();
         this.#buildingMeshes.clear();
+        this.#flatMeshes.clear();
     }
 }
 
@@ -146,31 +173,34 @@ class Batch {
 
     /** @type {THREE.BatchedMesh} */
     mesh;
-    #capacity = INITIAL_VERTICES;
+    #vertexCapacity = INITIAL_VERTICES;
+    #indexCapacity = INITIAL_INDICES;
     #freedVertices = 0;
+    #freedIndices = 0;
     #count = 0;
     #onEmpty;
 
     /** Features drawn by each instance. @type {Map<number, { geometryId: number, ranges: Array, tile: Object }>} */
     #instances = new Map();
 
-    constructor(descriptor, root, onEmpty) {
+    constructor(descriptor, root, frontToBack, onEmpty) {
         this.#onEmpty = onEmpty;
-        const mesh = new THREE.BatchedMesh(INITIAL_INSTANCES, INITIAL_VERTICES, INITIAL_VERTICES * 2, descriptor.material);
+        const mesh = new THREE.BatchedMesh(INITIAL_INSTANCES, INITIAL_VERTICES, INITIAL_INDICES, descriptor.material);
         mesh.name                   = 'ThreeGeoPlayBatch';
         mesh.layers.mask            = root.layers.mask;
         mesh.matrixAutoUpdate       = false;
         mesh.frustumCulled          = false;  // culled per tile instead
         mesh.perObjectFrustumCulled = true;
         mesh.sortObjects            = descriptor.kind === 'building';  // front to back (early depth rejection)
-        setUpDraw(mesh, descriptor);
+        setUpDraw(mesh, descriptor, frontToBack);
         root.add(mesh);
         this.mesh = mesh;
     }
 
     add(geometry, { ranges, tile }) {
         const vertices = geometry.getAttribute('position').count;
-        this.#reserve(vertices);
+        const indices  = geometry.index?.count ?? 0;
+        this.#reserve(vertices, indices);
         const mesh = this.mesh;
         const geometryId = mesh.addGeometry(geometry);
         geometry.dispose();
@@ -187,7 +217,7 @@ class Batch {
                 if (removed) return;
                 removed = true;
                 this.#instances.delete(instanceId);
-                this.#remove(geometryId, vertices);
+                this.#remove(geometryId, vertices, indices);
             },
         };
     }
@@ -207,15 +237,16 @@ class Batch {
      * compacts it and shrinks it to fit. Meant for when the map is idle, as it uploads the whole batch.
      */
     trim() {
-        if (this.#freedVertices <= this.#capacity / 2) return;
+        if (this.#freedVertices <= this.#vertexCapacity / 2 && this.#freedIndices <= this.#indexCapacity / 2) return;
         this.mesh.optimize();
         this.#freedVertices = 0;
-        const used = this.#capacity - this.mesh.unusedVertexCount;
-        let capacity = this.#capacity;
-        while (capacity > INITIAL_VERTICES && capacity / 2 >= used * 1.5) capacity /= 2;
-        if (capacity < this.#capacity) {
-            this.mesh.setGeometrySize(capacity, capacity * 2);
-            this.#capacity = capacity;
+        this.#freedIndices = 0;
+        const vertexCapacity = shrunk(this.#vertexCapacity, INITIAL_VERTICES, this.#vertexCapacity - this.mesh.unusedVertexCount);
+        const indexCapacity  = shrunk(this.#indexCapacity, INITIAL_INDICES, this.#indexCapacity - this.mesh.unusedIndexCount);
+        if (vertexCapacity < this.#vertexCapacity || indexCapacity < this.#indexCapacity) {
+            this.mesh.setGeometrySize(vertexCapacity, indexCapacity);
+            this.#vertexCapacity = vertexCapacity;
+            this.#indexCapacity = indexCapacity;
         }
     }
 
@@ -225,27 +256,42 @@ class Batch {
         this.#onEmpty();
     }
 
-    #remove(geometryId, vertices) {
+    #remove(geometryId, vertices, indices) {
         this.mesh.deleteGeometry(geometryId);
         this.#freedVertices += vertices;
+        this.#freedIndices += indices;
         if (--this.#count === 0) this.dispose();
     }
 
-    /** Makes room for `vertices` more vertices: compacts freed space first, grows if needed. */
-    #reserve(vertices) {
+    /** Makes room for `vertices` more vertices and `indices` more indices: compacts freed space first, grows if needed. */
+    #reserve(vertices, indices) {
         const mesh = this.mesh;
-        if (mesh.unusedVertexCount >= vertices) return;
-        if (this.#freedVertices > 0) {
+        const fits = () => mesh.unusedVertexCount >= vertices && mesh.unusedIndexCount >= indices;
+        if (fits()) return;
+        if (this.#freedVertices > 0 || this.#freedIndices > 0) {
             mesh.optimize();
             this.#freedVertices = 0;
-            if (mesh.unusedVertexCount >= vertices) return;
+            this.#freedIndices = 0;
+            if (fits()) return;
         }
-        const used = this.#capacity - mesh.unusedVertexCount;
-        let capacity = this.#capacity * 2;
-        while (capacity < used + vertices) capacity *= 2;
-        mesh.setGeometrySize(capacity, capacity * 2);
-        this.#capacity = capacity;
+        const vertexCapacity = grown(this.#vertexCapacity, this.#vertexCapacity - mesh.unusedVertexCount + vertices);
+        const indexCapacity  = grown(this.#indexCapacity, this.#indexCapacity - mesh.unusedIndexCount + indices);
+        mesh.setGeometrySize(vertexCapacity, indexCapacity);
+        this.#vertexCapacity = vertexCapacity;
+        this.#indexCapacity = indexCapacity;
     }
+}
+
+/** The capacity doubled until `needed` fits (unchanged when it already does). */
+function grown(capacity, needed) {
+    while (capacity < needed) capacity *= 2;
+    return capacity;
+}
+
+/** The capacity halved while half of it still leaves 50 % of room over `used` (never below `minimum`). */
+function shrunk(capacity, minimum, used) {
+    while (capacity > minimum && capacity / 2 >= used * 1.5) capacity /= 2;
+    return capacity;
 }
 
 /** Fallback: one plain mesh per tile geometry, child of the tile object. */
@@ -253,13 +299,15 @@ class MeshHandle {
 
     #mesh;
     #entry;
+    #onRemove;
 
-    constructor(descriptor, geometry, tileObject, entry) {
+    constructor(descriptor, geometry, tileObject, entry, frontToBack = false, onRemove = () => {}) {
+        this.#onRemove = onRemove;
         geometry.computeBoundingSphere();
         const mesh = new THREE.Mesh(geometry, descriptor.material);
         mesh.matrixAutoUpdate = false;
         mesh.layers.mask      = tileObject.layers.mask;
-        setUpDraw(mesh, descriptor);
+        setUpDraw(mesh, descriptor, frontToBack);
         tileObject.add(mesh);
         this.#mesh  = mesh;
         this.#entry = entry;
@@ -279,6 +327,7 @@ class MeshHandle {
 
     remove() {
         if (!this.#mesh) return;
+        this.#onRemove(this.#mesh);
         this.#mesh.removeFromParent();
         this.#mesh.geometry.dispose();
         this.#mesh = null;
@@ -292,8 +341,9 @@ class MeshHandle {
  *
  * @param {THREE.Mesh} mesh
  * @param {BatchDescriptor} descriptor
+ * @param {boolean} [frontToBack=false] - Flat layers: drawn front to back (drawHooks.js setFlatOrder).
  */
-function setUpDraw(mesh, { kind, renderOrder, castShadow, receiveShadow, depthPrepass }) {
+function setUpDraw(mesh, { kind, renderOrder, castShadow, receiveShadow, depthPrepass }, frontToBack = false) {
     mesh.userData.kind         = kind;
     mesh.userData.threeGeoPlay = true;
     mesh.userData.castShadow   = !!castShadow;   // the style's setting (see MeshBatches#updateShadowCasting)
@@ -304,15 +354,15 @@ function setUpDraw(mesh, { kind, renderOrder, castShadow, receiveShadow, depthPr
         return;
     }
     // Flat map layers are stacked by render order instead of depth.
-    mesh.renderOrder = renderOrder;
     drawWithoutDepthWrite(mesh);
+    setFlatOrder(mesh, renderOrder, frontToBack);
 }
 
 /**
- * The feature whose vertex range contains `vertex`: the last range starting at
+ * The feature whose range of corners contains `vertex`: the last range starting at
  * or before it (ranges of features that drew nothing are empty and skipped).
  * @param {{ ranges: Array, tile: Object }} entry
- * @param {number} vertex - Vertex index in the tile geometry.
+ * @param {number} vertex - Corner (index entry) in the tile geometry: 3 × the face index.
  */
 function featureOfVertex({ ranges, tile }, vertex) {
     let lo = 0;

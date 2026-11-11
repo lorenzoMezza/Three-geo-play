@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 import { decodeVectorTile, GeomType } from '../tiles/vectorTile.js';
 import { TileFeatureCollector } from '../tiles/TileFeatureCollector.js';
-import { LineLayering, lineLevel } from './lineLayering.js';
+import { LineLayering, isTunnel, lineLevel } from './lineLayering.js';
 import { classifyRings, clipPolygon } from '../geometry/polygonGeometry.js';
 import { roofVariation } from '../geometry/buildingGeometry.js';
 
@@ -25,6 +25,9 @@ const WHITE = Object.freeze({ r: 1, g: 1, b: 1 });
 
 /** Public names of the vector tile geometry types. */
 const GEOMETRY_TYPES = { [GeomType.POINT]: 'point', [GeomType.LINESTRING]: 'line', [GeomType.POLYGON]: 'polygon' };
+
+/** Added to the half width of a road where it cuts a railway it crosses, in metres. */
+const CROSSING_MARGIN_M = 0.5;
 
 /** Line simplification tolerance, as a fraction of the tile extent. */
 const LINE_SIMPLIFY_TOLERANCE = 2 / 4096;
@@ -208,13 +211,16 @@ export class Tile {
     plan(ctx) {
         const collector = new TileFeatureCollector(ctx.mapStyle, ctx.tileSchema, ctx.sourceLayers);
         const layers    = decodeVectorTile(this.#payload, collector.acceptsLayer);
-        const { lines, polygons, buildings } = collector.collect(layers);
+        const { lines, polygons, buildings, rails } = collector.collect(layers);
 
         // The tile keeps the local frame of its first build (see the class description).
         if (this.#frameSize === null) this.#frameSize = ctx.tileWorldSize;
         const size          = this.#frameSize;
         const toLocal       = size / ctx.tileWorldSize;            // world units → local units
         const unitsPerMeter = ctx.unitsPerMeter * toLocal;
+
+        /** MapConfig.maxSegmentMeters in the extent units of a tile layer (0: no limit). */
+        const maxEdge = extent => (ctx.maxSegmentMeters ? ctx.maxSegmentMeters * unitsPerMeter * extent / size : 0);
 
         /** The `featureStyle` overrides of a collected feature, or `null`. */
         const overrides = item => (item.style.featureStyle
@@ -258,6 +264,9 @@ export class Tile {
         // ── lines ────────────────────────────────────────────────────────────
         const relative = size * ctx.zoomScale;   // local units per `lineWidth` unit
         const layering = new LineLayering(ctx.mapStyle, unitsPerMeter / relative);
+        // The roads, with their drawn half width (extent units) and level: where one
+        // crosses a railway it decides what is left of the track (RailFeatureType)
+        const crossings = [];
         for (const item of lines) {
             const { style, feature, extent, ramp: isRamp } = item;
             const width = style.lineWidthMeters === null ? style.lineWidth * relative : style.lineWidthMeters * unitsPerMeter;
@@ -270,7 +279,7 @@ export class Tile {
             const outlineMaterial = asMaterial(custom?.outlineMaterial) ?? style.outlineMaterial;
 
             const key = `${item.layer}.${item.type}|${item.sourceLayer}|${level}|${isRamp}|${material.id}|${outlineMaterial?.id}`;
-            addToCommand(key, item, () => {
+            const command = addToCommand(key, item, () => {
                 const outlineExtra = style.outlineWidthMeters === null
                     ? style.outlineWidth * relative
                     : style.outlineWidthMeters * unitsPerMeter;
@@ -288,8 +297,13 @@ export class Tile {
                     jointSegments: style.jointSegments,
                     y:             style.Y * toLocal,
                     roundEnds:     level === 0,              // bridges / tunnels end flat on the road they join
+                    maxEdge:       maxEdge(extent),
                 };
             });
+            if (rails.length > 0 && item.layer === 'transportation') {
+                const drawn = command.outlineBatch >= 0 ? command.outlineWidth : command.width;
+                crossings.push({ sourceLayer: item.sourceLayer, index: item.index, halfWidth: drawn / 2 / command.scale, level });
+            }
         }
 
         // ── flat polygons ────────────────────────────────────────────────────
@@ -308,6 +322,7 @@ export class Tile {
                     max:   extent + margin,
                     scale: size / extent,
                     y:     style.Y * toLocal,
+                    maxEdge: maxEdge(extent),
                 };
             });
         }
@@ -366,6 +381,11 @@ export class Tile {
                     scale:   size / extent,
                     min:     -margin,
                     max:     extent + margin,
+                    // Simple extrusion: footprints simplified with the accuracy of the lines,
+                    // and walls shared with a neighbour at least as tall left out
+                    tolerance: style.simpleExtrusion ? LINE_SIMPLIFY_TOLERANCE * extent : 0,
+                    simple:    style.simpleExtrusion,
+                    maxEdge: maxEdge(extent),
                     yBase:   [],
                     yTop:    [],
                     raised:  [],
@@ -386,6 +406,55 @@ export class Tile {
             }
         }
 
+        // ── railways ─────────────────────────────────────────────────────────
+        // Bed and rails are extruded like buildings (same batches, shading and depth
+        // prepass); the roads crossing a track cut it in the worker.
+        for (const item of rails) {
+            const { style, feature, extent } = item;
+            // Under ground: a bed in relief would stand where the track is not
+            if (isTunnel(feature.properties)) continue;
+            const custom = overrides(item);
+            if (custom?.visible === false) continue;
+            const material     = style.bed ? asMaterial(custom?.material) ?? style.material : null;
+            const railMaterial = style.rails ? style.railMaterial : null;
+            if (!material && !railMaterial) continue;
+
+            const y = style.Y * toLocal;
+            if (!shadingOf.has(style)) {
+                shadingOf.set(style, shadings.length);
+                shadings.push(buildingShading(style, y, unitsPerMeter));
+            }
+            const command = addToCommand(`${item.layer}.${item.type}|${item.sourceLayer}|${material?.id}|${railMaterial?.id}`, item, () => {
+                const margin    = CLIP_MARGIN * extent;
+                const perMeter  = unitsPerMeter * extent / size;   // extent units per metre
+                const bedBatch  = material ? batchFor('building', material, null, style) : -1;
+                const railBatch = railMaterial ? batchFor('building', railMaterial, null, style) : -1;
+                return {
+                    type:         'rail',
+                    // The bed (or the rails without a bed), then the rails of a bed as the second batch
+                    batch:        bedBatch >= 0 ? bedBatch : railBatch,
+                    outlineBatch: bedBatch >= 0 ? railBatch : -1,
+                    bed:          bedBatch >= 0,
+                    rails:        railBatch >= 0,
+                    shading:      shadingOf.get(style),
+                    scale:        size / extent,
+                    min:          -margin,
+                    max:          extent + margin,
+                    tolerance:    LINE_SIMPLIFY_TOLERANCE * extent,
+                    y,
+                    bedTop:       y + style.bedHeightMeters * unitsPerMeter,
+                    railHeight:   style.railHeightMeters * unitsPerMeter,
+                    bedHalf:      style.bedWidthMeters / 2 * perMeter,
+                    gaugeHalf:    style.gaugeMeters / 2 * perMeter,
+                    railHalf:     style.railWidthMeters / 2 * perMeter,
+                    margin:       CROSSING_MARGIN_M * perMeter,
+                    maxEdge:      maxEdge(extent),
+                    levels:       [],
+                };
+            });
+            command.levels.push(lineLevel(feature.properties));
+        }
+
         // Lit materials need normals and only `vertexColors` materials read colours:
         // the defaults (unlit) do not pay for what they do not use.
         const job = {
@@ -397,6 +466,7 @@ export class Tile {
             })),
             shadings,
             commands,
+            crossings,
         };
         return { job, batches, items, footprints: { cells: footprints }, unitsPerMeter };
     }
@@ -411,7 +481,7 @@ export class Tile {
      * @param {import('./tileGeometry.js').TileGeometry} geometry
      */
     apply(ctx, plan, geometry) {
-        // Which feature draws which vertices, for picking.
+        // Which feature draws which corners (index entries), for picking.
         const ranges = plan.batches.map(() => []);
         let n = 0;
         plan.job.commands.forEach((command, i) => {
@@ -505,9 +575,10 @@ export class Tile {
 }
 
 
-function createGeometry({ kind, material }, { positions, normals, colors }) {
+function createGeometry({ kind, material }, { positions, normals, colors, index }) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setIndex(new THREE.BufferAttribute(index, 1));
     if (kind === 'building') {
         if (normals) geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
         if (colors)  geometry.setAttribute('color',  new THREE.BufferAttribute(colors, 3, true));

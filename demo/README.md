@@ -1,0 +1,67 @@
+# ThreeGeoPlay — demo website
+
+Live demo of [ThreeGeoPlay](https://github.com/lorenzoMezza/Three-geo-play): OpenStreetMap vector tiles rendered as 3D Three.js geometry.
+
+🔴 **Live:** https://lorenzomezza.github.io/Three-geo-play/
+
+## Three scenes
+
+Switch with the bar at the top of the page.
+
+- **Explore** — the map explorer and its settings panel (below).
+- **Walk** — a runner in Piazza San Pietro. Run through Rome, hold Space for a super jump onto the roofs,
+  collect the coins on the streets and roofs, press E to paint the building in front of you.
+- **Fly** — a propeller plane over the city: a grand tour through glowing rings above the landmarks,
+  with contrails, the plane's shadow on the roofs and crashes into the buildings.
+
+The models are built from simple shapes (`src/game/models.js`). The games use the library the way your own
+game would (`src/game/`):
+
+- the map is set in metres (`unitsPerMeter: 1`) and the runner and the plane are the follow target, so
+  the tiles load around them;
+- walls, roofs and crashes use `getHeightAt()`, the height of the buildings at any point;
+- coins are placed from the street and building data and added to the tiles' own groups, so they follow
+  the map and disappear with their tile;
+- painting uses `pickFeature()` and `featureStyle`; the rings are placed with `latLonToWorld()`;
+- everything you add casts shadows on the city and hides behind the buildings like any Three.js object.
+
+## What the explorer shows
+
+- Tiles loaded around the camera (follow mode, the default), around the point you look at, or manually
+- Solid 3D buildings with baked ambient occlusion and wall shading, lit by a sun you can move
+- Real-time shadows: buildings shade the map and each other (the style's shadow layer draws them on the unlit map)
+- Transparent buildings drawn as a single layer of "glass" — no inner walls
+- Click on the map to see what is there (building height, road type, land use…): `pickFeature()` of the library, with a pin that casts its shadow like any object of your scene
+- Live restyling of every layer: colours, visibility, outlines, building height, opacity, roof tint, sun or baked shading
+- Themes applied to the tiles already on screen: the day style, the library's `MapStyle.dark()` and **Neon**, drawn with custom shaders
+  ([`src/neon.js`](src/neon.js)): built-in materials extended with `onBeforeCompile` — windows on every floor, circuit roofs,
+  a hexagon grid on parks, glowing roads and a light pulse, all in metres — still batched (one draw call per material),
+  lit, shadowed and fogged; a generated canvas texture; and a `ShaderMaterial` written from scratch for the animated water
+- Jumping to real places, geographic coordinates of the view
+- Switching tile provider live: the local tile set, OpenFreeMap through its MapLibre style URL, or Mapbox Streets with your access token
+
+## Tiles
+
+`public/tiles` contains an OpenMapTiles-schema tile set at **zoom 16 only**, covering Rome and most of Lazio
+(lat 41.24…42.84, lon 11.45…14.03). Files are named `Y{y}X{x}.pbf`, so the map uses that URL template
+and a fixed zoom level. Map data © [OpenMapTiles](https://openmaptiles.org/) © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright).
+
+## Development
+
+The demo lives in the `demo/` folder of the library repository and is built against the library
+**source** (`../src`), so it always shows the latest code. `vite.config.js` uses another copy when
+`THREE_GEO_PLAY_SRC` points at its `src` folder, and the `lm-three-geo-play` npm package when there is none.
+
+```bash
+git clone https://github.com/lorenzoMezza/Three-geo-play.git
+cd Three-geo-play/demo
+npm install
+npm run dev      # http://localhost:3000/Three-geo-play/
+npm run build    # production build in dist/
+```
+
+## Deployment
+
+Every push to `main` that changes the library or the demo runs `.github/workflows/pages.yml` at the
+root of the repository: it builds the demo with the library source and publishes `demo/dist/` to GitHub
+Pages. `dist/` is a build output and is not committed.
