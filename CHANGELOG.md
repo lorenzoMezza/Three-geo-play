@@ -29,6 +29,10 @@ Changed:
 - A tile download that fails is retried for as long as the tile is in the render area (1 s, 2 s, 4 s… then every 16 s, logged for the first 5 attempts) instead of giving up after 5 attempts: a device offline for more than a few seconds was left with holes in the map until it moved away. `failed` tiles in `getTileStats()` are now only those whose data could not be built.
 - Circular layout: `renderDistance` is a radius around the exact map centre and may be fractional; the tiles are chosen again every 1/8 tile of movement. The grid layout still rounds it to whole tiles around the centre tile.
 
+Repository:
+
+- The demo website now lives in `demo/` of this repository, built from the library source on every push: https://lorenzomezza.github.io/Three-geo-play/
+
 ## 2.3.0
 
 - New: `buildingLayer.simpleExtrusion`. Every building is drawn as a plain extrusion of its 2D footprint, one prism from the ground to its roof: no raised building parts, no undersides, one quad per wall. Fewer triangles for mobile and for stylised maps.

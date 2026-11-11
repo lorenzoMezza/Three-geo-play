@@ -2,7 +2,7 @@
 
 Live demo of [ThreeGeoPlay](https://github.com/lorenzoMezza/Three-geo-play): OpenStreetMap vector tiles rendered as 3D Three.js geometry.
 
-🔴 **Live:** https://lorenzomezza.github.io/Three-geo-play-demo-website/
+🔴 **Live:** https://lorenzomezza.github.io/Three-geo-play/
 
 ## Three scenes
 
@@ -48,25 +48,20 @@ and a fixed zoom level. Map data © [OpenMapTiles](https://openmaptiles.org/) ©
 
 ## Development
 
-The demo is built against the library **source**, so it always reflects the latest code.
-`vite.config.js` looks for it in this order:
-
-1. the folder in the `THREE_GEO_PLAY_SRC` environment variable;
-2. `../Three-geo-play/src` — the library repository cloned next to this one;
-3. `../../src` — this repository checked out inside the library repository;
-4. otherwise the `lm-three-geo-play` npm package (`npm i lm-three-geo-play`).
+The demo lives in the `demo/` folder of the library repository and is built against the library
+**source** (`../src`), so it always shows the latest code. `vite.config.js` uses another copy when
+`THREE_GEO_PLAY_SRC` points at its `src` folder, and the `lm-three-geo-play` npm package when there is none.
 
 ```bash
 git clone https://github.com/lorenzoMezza/Three-geo-play.git
-git clone https://github.com/lorenzoMezza/Three-geo-play-demo-website.git
-cd Three-geo-play-demo-website
+cd Three-geo-play/demo
 npm install
-npm run dev      # http://localhost:3000/Three-geo-play-demo-website/
+npm run dev      # http://localhost:3000/Three-geo-play/
 npm run build    # production build in dist/
 ```
 
 ## Deployment
 
-Pushing to `main` runs `.github/workflows/static.yml`, which checks out this repository and the library,
-builds the site and publishes `dist/` to GitHub Pages. After changing the library, run the workflow manually
-from the Actions tab to redeploy the demo with the new code. `dist/` is a build output and is not committed.
+Every push to `main` that changes the library or the demo runs `.github/workflows/pages.yml` at the
+root of the repository: it builds the demo with the library source and publishes `demo/dist/` to GitHub
+Pages. `dist/` is a build output and is not committed.
