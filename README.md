@@ -7,10 +7,10 @@
 [![types](https://img.shields.io/npm/types/lm-three-geo-play)](https://github.com/lorenzoMezza/Three-geo-play/blob/main/API.md)
 
 
-### 🔴 [Try the live demo](https://lorenzomezza.github.io/Three-geo-play-demo-website/) — explore Rome, walk through the streets or fly over the city, in the browser.
+### 🔴 [Try the live demo](https://lorenzomezza.github.io/Three-geo-play/) — explore Rome, walk through the streets or fly over the city, in the browser.
 
 
-[![ThreeGeoPlay demo: St. Peter's Square with extruded buildings and real-time shadows](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/hero.jpg)](https://lorenzomezza.github.io/Three-geo-play-demo-website/)
+[![ThreeGeoPlay demo: St. Peter's Square with extruded buildings and real-time shadows](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/hero.jpg)](https://lorenzomezza.github.io/Three-geo-play/)
 
 ## Install
 
@@ -82,7 +82,7 @@ The OpenMapTiles, Mapbox Streets v8 and Shortbread schemas are detected automati
 | ![Glass buildings](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/glass.jpg) | ![Buildings styled from their OSM height](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/data-driven.jpg) |
 | ![Walk scene of the demo](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/walk.jpg) | ![Fly scene of the demo](https://raw.githubusercontent.com/lorenzoMezza/Three-geo-play/main/docs/images/fly.jpg) |
 
-<sub>Shadows · night theme · glass buildings · data-driven style · Walk and Fly scenes of the [demo](https://lorenzomezza.github.io/Three-geo-play-demo-website/). Map data © OpenStreetMap contributors, © OpenMapTiles.</sub>
+<sub>Shadows · night theme · glass buildings · data-driven style · Walk and Fly scenes of the [demo](https://lorenzomezza.github.io/Three-geo-play/). Map data © OpenStreetMap contributors, © OpenMapTiles.</sub>
 
 ## A taste of the API
 
@@ -110,7 +110,7 @@ marker.position.set(x, geo.getHeightAt(x, z), z);
 
 - 📘 **[API reference](https://github.com/lorenzoMezza/Three-geo-play/blob/main/API.md)** — every class, option, default, event and type
 - 📖 **[Guide](https://github.com/lorenzoMezza/Three-geo-play/blob/main/docs/GUIDE.md)** — styling, buildings and glass, integrating with your scene, shadows, tile providers, migrating from 1.x
-- ▶️ **[Live demo](https://lorenzomezza.github.io/Three-geo-play-demo-website/)** and its [source](https://github.com/lorenzoMezza/Three-geo-play-demo-website)
+- ▶️ **[Live demo](https://lorenzomezza.github.io/Three-geo-play/)** and its [source](https://github.com/lorenzoMezza/Three-geo-play/tree/main/demo)
 - 🧪 **Playground** — `cd playground && npm install && npm run dev` runs the library from `src` for quick tries and debugging
 - 🤝 **[Contributing](https://github.com/lorenzoMezza/Three-geo-play/blob/main/CONTRIBUTING.md)** — how the code is organised, tests and guidelines
 - 📝 **[Changelog](https://github.com/lorenzoMezza/Three-geo-play/blob/main/CHANGELOG.md)**
