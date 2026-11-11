@@ -62,6 +62,25 @@ test('getHeightAt() matches the buildings that are drawn', async () => {
     geo.destroy();
 });
 
+test('getHeightAt() with below leaves out the parts that start above it', async () => {
+    const { geo } = await loadMap(server.url);
+    let raised = 0;
+    for (let x = -400; x <= 400; x += 8) {
+        for (let z = -400; z <= 400; z += 8) {
+            const full = geo.getHeightAt(x, z);
+            assert.equal(geo.getHeightAt(x, z, Infinity), full, `default at ${x}, ${z}`);
+            assert.equal(geo.getHeightAt(x, z, full), full, `everything under the top at ${x}, ${z}`);
+            assert.equal(geo.getHeightAt(x, z, -1), 0, `nothing starts under the ground at ${x}, ${z}`);
+            const ground = geo.getHeightAt(x, z, 0);
+            assert.ok(ground <= full, `at ${x}, ${z}`);
+            if (ground < full) raised++;
+        }
+    }
+    // the fixture has parts on a min_height (arches, raised floors): they can be walked under
+    assert.ok(raised > 50, 'some points are under raised parts');
+    geo.destroy();
+});
+
 test('pickFeature() returns what the ray sees', async () => {
     const { geo } = await loadMap(server.url);
     const raycaster = new THREE.Raycaster();

@@ -52,8 +52,11 @@ export function createRunner() {
     const legs = [-1, 1].map(side => {
         const hip  = limb(body, 0.15, 0.44, pants, side * 0.11, 0.95)
         const knee = limb(hip, 0.13, 0.42, pants, 0, -0.44)
-        knee.add(part(new THREE.BoxGeometry(0.15, 0.09, 0.26), shoes, 0, -0.45, -0.05))
-        return { hip, knee }
+        const ankle = new THREE.Group()
+        ankle.position.set(0, -0.42, 0)
+        ankle.add(part(new THREE.BoxGeometry(0.15, 0.09, 0.26), shoes, 0, -0.03, -0.05))
+        knee.add(ankle)
+        return { hip, knee, ankle }
     })
     const arms = [-1, 1].map(side => {
         const shoulder = limb(body, 0.12, 0.3, hoodie, side * 0.3, 1.5)
@@ -79,28 +82,43 @@ export function createRunner() {
             const legAmp = 0.25 + moving * 0.75
             const armAmp = 0.2 + moving * 0.9
 
-            legs.forEach(({ hip, knee }, i) => {
+            // The runner faces −Z: a positive rotation about X swings a hanging limb forward.
+            // Thighs swing both ways; knees only bend back (negative), elbows only forward.
+            legs.forEach(({ hip, knee, ankle }, i) => {
                 const s = i === 0 ? swing : -swing
                 let hipX  = speed > 0.3 ? s * legAmp : 0
-                let kneeX = speed > 0.3 ? Math.max(0, -Math.sin(phase + (i === 0 ? 0 : Math.PI))) * (0.4 + moving) : 0
-                if (!grounded) { hipX = i === 0 ? -0.9 : 0.3; kneeX = i === 0 ? 1.2 : 0.4 }
-                if (charge > 0) { hipX = -0.9 * charge - 0.2; kneeX = 1.7 * charge + 0.3 }
+                let kneeX = speed > 0.3 ? -Math.max(0, -Math.sin(phase + (i === 0 ? 0 : Math.PI))) * (0.4 + moving) : 0
+                if (!grounded) { hipX = i === 0 ? 0.9 : -0.3; kneeX = i === 0 ? -1.2 : -0.4 }
+                if (charge > 0) { hipX = 0.9 * charge + 0.2; kneeX = -(1.7 * charge + 0.3) }
                 hip.rotation.x  = THREE.MathUtils.damp(hip.rotation.x, hipX, 18, dt)
                 knee.rotation.x = THREE.MathUtils.damp(knee.rotation.x, kneeX, 18, dt)
+                // Crouching, the feet stay flat on the ground
+                const flat = charge > 0 ? -(body.rotation.x + hip.rotation.x + knee.rotation.x) : 0
+                ankle.rotation.x = THREE.MathUtils.damp(ankle.rotation.x, flat, 18, dt)
             })
             arms.forEach(({ shoulder, elbow }, i) => {
                 const s = i === 0 ? -swing : swing
                 let armX   = speed > 0.3 ? s * armAmp : Math.sin(time * 1.6 + i) * 0.04
-                let elbowX = -0.3 - moving * 0.9
-                if (!grounded) { armX = verticalSpeed > 0 ? -2.6 : -1.6; elbowX = -0.2 }
-                if (charge > 0) { armX = 0.9 * charge; elbowX = -1.2 }
+                let elbowX = 0.3 + moving * 0.9
+                if (!grounded) { armX = verticalSpeed > 0 ? 2.6 : 1.6; elbowX = 0.2 }
+                if (charge > 0) { armX = -0.9 * charge; elbowX = 1.2 }
                 shoulder.rotation.x = THREE.MathUtils.damp(shoulder.rotation.x, armX, 16, dt)
                 elbow.rotation.x    = THREE.MathUtils.damp(elbow.rotation.x, elbowX, 16, dt)
             })
 
-            // Bounce while running, breathe while idle, crouch while charging a super jump.
+            // Bounce while running, breathe while idle, crouch while charging a super jump:
+            // the body goes down by as much as the bent legs are shorter (less what the lean
+            // already lowers the hips), so the feet stay on the ground (hips 0.95 m up,
+            // thigh 0.44 m, shin 0.42 m).
             const bob = grounded ? Math.abs(Math.cos(phase)) * 0.06 * moving + Math.sin(time * 2) * 0.008 : 0
-            body.position.y = THREE.MathUtils.damp(body.position.y, bob - charge * 0.35, 20, dt)
+            let crouch = 0
+            if (charge > 0) {
+                const lean  = body.rotation.x
+                const thigh = lean + legs[0].hip.rotation.x
+                const shin  = thigh + legs[0].knee.rotation.x
+                crouch = 0.44 * (1 - Math.cos(thigh)) + 0.42 * (1 - Math.cos(shin)) - 0.95 * (1 - Math.cos(lean))
+            }
+            body.position.y = THREE.MathUtils.damp(body.position.y, bob - crouch, 20, dt)
             body.rotation.x = THREE.MathUtils.damp(body.rotation.x, -moving * 0.18 - charge * 0.3, 10, dt)
         },
     }

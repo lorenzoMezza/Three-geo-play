@@ -147,12 +147,18 @@ The inverse conversion.
 
 World units per metre at the origin: `MapConfig.unitsPerMeter` when set, otherwise derived from `tileWorldSize`, the zoom level and the origin latitude.
 
-#### `getHeightAt(x: number, z: number): number`
+#### `getHeightAt(x: number, z: number, below?: number): number`
 
 Top of the highest building part at a world position, in world units; `0` on open ground or where no tile is loaded. It uses the same footprints and heights that are drawn (vertical exaggeration and `featureStyle` included) through a spatial index, so it is cheap enough to call every frame — for collisions, placing objects on roofs or keeping a camera above the buildings.
 
+With `below`, the parts whose base (`min_height`) is above that height are left out, so a character can walk under an arch, a portico or a raised floor instead of hitting it as a wall. Pass the top of the character's head.
+
 ```js
 player.position.y = Math.max(player.position.y, geo.getHeightAt(player.position.x, player.position.z));
+
+// what a 1.8 m tall character standing at y bumps into
+const head = y + 1.8 * geo.getUnitsPerMeter();
+const blocked = geo.getHeightAt(x, z, head) > y + step;
 ```
 
 ### Picking

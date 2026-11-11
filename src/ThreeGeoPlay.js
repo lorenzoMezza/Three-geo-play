@@ -240,16 +240,23 @@ export class ThreeGeoPlay extends THREE.EventDispatcher {
      * hidden buildings) and costs a few point-in-polygon tests: fine every frame,
      * e.g. to keep a character on the roofs or a drone above them.
      *
+     * With `below`, the parts that start above that height are left out: a
+     * character walks under an arch, a portico or a raised floor instead of
+     * hitting it as a wall.
+     *
      * @param {number} x - X in the map group's space.
      * @param {number} z - Z in the map group's space.
+     * @param {number} [below] - Only the parts whose base (`min_height`) is at or under this height, in world units.
      * @returns {number}
      *
      * @example
      * const { x, z } = geoPlay.latLonToWorld(41.8902, 12.4922);
      * marker.position.set(x, geoPlay.getHeightAt(x, z), z); // on top of the Colosseum
+     * // what a 1.8 m tall character standing at y bumps into
+     * const obstacle = geoPlay.getHeightAt(x, z, y + 1.8 * geoPlay.getUnitsPerMeter());
      */
-    getHeightAt(x, z) {
-        return this.#tileManager?.heightAt(x, z) ?? 0;
+    getHeightAt(x, z, below = Infinity) {
+        return this.#tileManager?.heightAt(x, z, below) ?? 0;
     }
 
     /**

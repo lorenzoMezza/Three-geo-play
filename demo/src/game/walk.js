@@ -15,6 +15,7 @@ const SUPER_JUMP = 27     // added by a full charge: about 25 m high
 const CHARGE_S   = 0.9
 const STEP       = 0.7    // highest step climbed without jumping
 const RADIUS     = 0.35
+const HEAD       = 1.8    // the runner's height: arches higher than this are walked under
 const TURN_SPEED = 2.8    // rad/s
 const TAP_S      = 0.15   // a shorter press of Space is a plain hop
 
@@ -75,7 +76,8 @@ export function createWalkMode(app) {
             hud.flash('Face a wall to paint it')
             return
         }
-        painted.set(hit.id, PAINTS[painted.size % PAINTS.length])
+        // `key` names one building on the map (`id` is 0 for many of them in OpenMapTiles)
+        if (!painted.has(hit.key)) painted.set(hit.key, PAINTS[painted.size % PAINTS.length])
         geo.getMapStyle().refresh()
         hud.flash(`Painted a ${Math.round(Number(hit.properties.render_height) || 10)} m building`)
     }
@@ -94,7 +96,7 @@ export function createWalkMode(app) {
             painted.clear()
             app.scene.add(player)
             coins.start()
-            geo.getMapStyle().buildingLayer.featureStyle = ({ id }) => (painted.has(id) ? { color: painted.get(id) } : null)
+            geo.getMapStyle().buildingLayer.featureStyle = ({ key }) => (painted.has(key) ? { color: painted.get(key) } : null)
 
             canvas.addEventListener('pointerdown', onDown)
             window.addEventListener('pointerup', onUp)
@@ -140,11 +142,13 @@ export function createWalkMode(app) {
             velocity.z += (dz * speed - velocity.z) * grip
             const moving = forward !== 0 || turn !== 0
 
-            // Walls stop the runner; low steps are climbed. Slide along walls.
+            // Walls stop the runner; low steps are climbed. Slide along walls. Only what
+            // starts below the head is a wall: arches and porticoes are walked under.
+            const head = pos.y + HEAD
             const free = (x, z) => {
                 const hs = Math.hypot(velocity.x, velocity.z) || 1
-                return geo.getHeightAt(x, z) <= pos.y + STEP &&
-                       geo.getHeightAt(x + velocity.x / hs * RADIUS, z + velocity.z / hs * RADIUS) <= pos.y + STEP
+                return geo.getHeightAt(x, z, head) <= pos.y + STEP &&
+                       geo.getHeightAt(x + velocity.x / hs * RADIUS, z + velocity.z / hs * RADIUS, head) <= pos.y + STEP
             }
             const nx = pos.x + velocity.x * dt
             const nz = pos.z + velocity.z * dt
@@ -164,12 +168,16 @@ export function createWalkMode(app) {
             }
 
             // ── gravity and landing on the ground or on a roof ────────────────
-            const ground = geo.getHeightAt(pos.x, pos.z)
+            // The ground is the highest part starting under the feet (plus a step when
+            // walking): under an arch it is the street, not the top of the arch.
+            const ground = geo.getHeightAt(pos.x, pos.z, pos.y + (grounded ? STEP : 0))
             if (grounded && ground < pos.y - 0.05) grounded = false   // walked off a roof
             if (!grounded) {
                 velocity.y -= GRAVITY * dt
                 pos.y += velocity.y * dt
-                if (pos.y <= ground) {
+                // the head hits the underside of an arch: fall back
+                if (velocity.y > 0 && geo.getHeightAt(pos.x, pos.z, pos.y + HEAD) > Math.max(ground, pos.y)) velocity.y = 0
+                if (velocity.y <= 0 && pos.y <= ground) {
                     pos.y = ground
                     velocity.y = 0
                     grounded = true
@@ -200,7 +208,7 @@ export function createWalkMode(app) {
                 target.y + Math.sin(view.pitch) * view.distance,
                 target.z + Math.cos(view.yaw) * cp * view.distance,
             )
-            desired.y = Math.max(desired.y, geo.getHeightAt(desired.x, desired.z) + 0.6)
+            desired.y = Math.max(desired.y, geo.getHeightAt(desired.x, desired.z, desired.y) + 0.6)
             camera.position.lerp(desired, 1 - Math.exp(-dt * 10))
             camera.lookAt(target)
             app.focus.copy(pos)
