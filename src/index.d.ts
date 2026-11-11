@@ -876,9 +876,11 @@ export declare class ThreeGeoPlay extends THREE.EventDispatcher<ThreeGeoPlayEven
     /**
      * Top of the highest building part at a map-space position, 0 on open ground or where no tile is
      * loaded. Follows what is drawn (exaggeration, `featureStyle`); cheap enough for every frame.
+     * With `below` (world units), parts whose base is above it are left out: arches and porticoes
+     * can be walked under.
      * @example marker.position.set(x, geoPlay.getHeightAt(x, z), z);
      */
-    getHeightAt(x: number, z: number): number;
+    getHeightAt(x: number, z: number, below?: number): number;
 
     /** Converts a world-space X/Z position to geographic coordinates with the current config. */
     worldToLatLon(x: number, z: number): { lat: number; lon: number };

@@ -123,14 +123,15 @@ export class Tile {
      * the tile's local frame, or `null` where there is none.
      * @param {number} lx
      * @param {number} lz
+     * @param {number} [below] - Only the parts whose base is at or under this height (local units).
      * @returns {number|null}
      */
-    heightAt(lx, lz) {
+    heightAt(lx, lz, below = Infinity) {
         const parts = this.#footprints?.cells.get(footprintCell(lx, lz, this.#frameSize));
         if (!parts) return null;
         let top = null;
         for (const p of parts) {
-            if ((top !== null && p.top <= top) || lx < p.minX || lx > p.maxX || lz < p.minZ || lz > p.maxZ) continue;
+            if ((top !== null && p.top <= top) || p.base > below || lx < p.minX || lx > p.maxX || lz < p.minZ || lz > p.maxZ) continue;
             if (insideRings(p.rings, lx / p.scale, lz / p.scale)) top = p.top;
         }
         return top;
@@ -402,7 +403,7 @@ export class Tile {
             // Footprints for heightAt(). The worker clips the building again: cheaper than sending it.
             for (const polygon of classifyRings(feature.loadGeometry())) {
                 const part = clipPolygon(polygon, command.min, command.max);
-                if (part) indexFootprint(footprints, part, command.scale, yTop, size);
+                if (part) indexFootprint(footprints, part, command.scale, yBase, yTop, size);
             }
         }
 
@@ -621,8 +622,8 @@ function footprintCell(lx, lz, size) {
 }
 
 /** Adds a building part to the footprint grid (bounds in local units, rings kept in extent units). */
-function indexFootprint(cells, rings, scale, top, size) {
-    const part = { rings, scale, top, minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+function indexFootprint(cells, rings, scale, base, top, size) {
+    const part = { rings, scale, base, top, minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
     for (const ring of rings) {
         for (let i = 0; i < ring.length; i += 2) {
             const x = ring[i] * scale, z = ring[i + 1] * scale;

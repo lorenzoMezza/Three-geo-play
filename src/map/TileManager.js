@@ -286,9 +286,10 @@ export class TileManager {
      * Height of the buildings at a map-space position (see {@link ThreeGeoPlay#getHeightAt}).
      * @param {number} x
      * @param {number} z
+     * @param {number} [below] - Only the parts whose base is at or under this height.
      * @returns {number} Top of the highest building part there, 0 on open ground or where no tile is loaded.
      */
-    heightAt(x, z) {
+    heightAt(x, z, below = Infinity) {
         const cfg    = this.#config;
         const size   = cfg.tileWorldSize;
         const offset = cfg.worldOriginOffset;
@@ -299,7 +300,7 @@ export class TileManager {
         const record = this.#tiles.get(`${tx}/${ty}`);
         if (!record || record.state !== State.READY) return 0;
         const frame = record.tile.size;
-        const top   = record.tile.heightAt((fx - tx) * frame, (fy - ty) * frame);
+        const top   = record.tile.heightAt((fx - tx) * frame, (fy - ty) * frame, below * (frame / size));
         return top === null ? 0 : top * (size / frame);
     }
 

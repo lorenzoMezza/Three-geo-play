@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.1
+
+New:
+
+- `getHeightAt(x, z, below)`: an optional height that leaves out the building parts starting above it (their `min_height`). A character can walk under arches, porticoes and raised floors instead of hitting them as walls; without it the result is the same as before.
+
 ## 2.4.0
 
 New:

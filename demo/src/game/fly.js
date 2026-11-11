@@ -186,7 +186,7 @@ export function createFlyMode(app) {
             plane.propeller.rotation.z += dt * (30 + state.speed * 0.4)
 
             // ── crash into the roofs or the ground ────────────────────────────
-            if (pos.y < geo.getHeightAt(pos.x, pos.z) + 2.5) {
+            if (pos.y < geo.getHeightAt(pos.x, pos.z, pos.y + 2.5) + 2.5) {   // under an arch is not a crash
                 hud.flash('Crash! Back to the last ring', 1.5)
                 respawn(checkpoint)
             }
