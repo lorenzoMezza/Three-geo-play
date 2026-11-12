@@ -18,7 +18,7 @@
 npm i lm-three-geo-play three
 ```
 
-Three.js is a peer dependency (r150+, r170+ recommended). ES module and CommonJS builds and TypeScript types are included; no other dependencies.
+Three.js is a peer dependency (r150+ or r170+ recommended). ES module and CommonJS builds and TypeScript types are included; no other dependencies.
 
 ## Quick start
 
