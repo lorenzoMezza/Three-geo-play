@@ -60,7 +60,6 @@ Pass a TileJSON, a MapLibre / Mapbox style URL, a `{z}/{x}/{y}` template or a `m
 | VersaTiles | `https://tiles.versatiles.org/tiles/osm/tiles.json` | no |
 | Carto | `https://basemaps.cartocdn.com/gl/positron-gl-style/style.json` | no |
 | MapTiler | `https://api.maptiler.com/tiles/v3/tiles.json?key=…` | yes |
-| Stadia Maps | `https://tiles.stadiamaps.com/styles/alidade_smooth.json` | yes (not on localhost) |
 | Mapbox | `mapbox://mapbox.mapbox-streets-v8` with `accessToken: 'pk.…'` | yes |
 | Your own server | tileserver-gl, martin, `pmtiles serve`, static `.pbf` files | — |
 
